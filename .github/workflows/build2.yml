@@ -1245,7 +1245,7 @@ jobs:
                     }
                   }
                   Spacer(Modifier.height(8.dp))
-                  LabeledNum("مبلغ اولیه (تومان) — اختیاری", credit, hint = "0")
+                  LabeledNumLabeledNum("مبلغ اولیه (تومان) — اختیاری", credit, { credit = it }, hint = "0")
                   Spacer(Modifier.height(8.dp))
                   Text("مشتری (اختیاری):", color = TextDim)
                   Column(Modifier.heightIn(max = 130.dp).verticalScroll(rememberScrollState())) {
