@@ -20,11 +20,7 @@ jobs:
       - name: Generate project files
         run: |
           set -e
-          mkdir -p app/src/main/res/values
-          mkdir -p app/src/main/java/com/cj/gamenet/data
-          mkdir -p app/src/main/java/com/cj/gamenet/logic
-          mkdir -p app/src/main/java/com/cj/gamenet/util
-          mkdir -p app/src/main/java/com/cj/gamenet/ui/screens
+          mkdir -p app/src/main/res/values app/src/main/java/com/cj/gamenet/data app/src/main/java/com/cj/gamenet/logic app/src/main/java/com/cj/gamenet/util app/src/main/java/com/cj/gamenet/ui/screens
 
           cat > settings.gradle.kts << 'KTEOF'
           pluginManagement {
@@ -70,19 +66,12 @@ jobs:
               versionCode = 1
               versionName = "1.0.0"
             }
-            buildTypes {
-              release {
-                isMinifyEnabled = false
-                signingConfig = signingConfigs.getByName("debug")
-              }
-            }
             compileOptions {
               sourceCompatibility = JavaVersion.VERSION_17
               targetCompatibility = JavaVersion.VERSION_17
             }
             kotlinOptions { jvmTarget = "17" }
             buildFeatures { compose = true }
-            lint { checkReleaseBuilds = false }
           }
           dependencies {
             implementation(platform("androidx.compose:compose-bom:2024.09.03"))
@@ -275,11 +264,15 @@ jobs:
           package com.cj.gamenet.data
 
           object Keys {
-            const val NET_NAME = "net_name"; const val NET_NAME_EN = "net_name_en"
-            const val PHONE = "phone"; const val ADDRESS = "address"
+            const val NET_NAME = "net_name"
+            const val NET_NAME_EN = "net_name_en"
+            const val PHONE = "phone"
+            const val ADDRESS = "address"
             const val CURRENCY = "currency"
-            const val REWARD_ENABLED = "reward_enabled"; const val REWARD_HOURS = "reward_hours"
-            const val REWARD_TITLE = "reward_title"; const val LOW_STOCK = "low_stock"
+            const val REWARD_ENABLED = "reward_enabled"
+            const val REWARD_HOURS = "reward_hours"
+            const val REWARD_TITLE = "reward_title"
+            const val LOW_STOCK = "low_stock"
             const val PIN_HASH = "admin_pin_hash"
           }
           KTEOF
@@ -312,14 +305,13 @@ jobs:
             @Query("SELECT * FROM sessions WHERE id = :id") suspend fun session(id: Long): Session?
             @Query("SELECT * FROM sessions") suspend fun allSessions(): List<Session>
             @Transaction @Query("SELECT * FROM sessions WHERE endTime IS NULL") fun activeWithLogs(): Flow<List<SessionWithLogs>>
-            @Transaction @Query("SELECT * FROM sessions WHERE id = :id") fun sessionWithLogsFlow(id: Long): Flow<SessionWithLogs?>
+            @Transaction @Query("SELECT * FROM sessions WHERE id = :id") fun sessionWithLogsFlow(id: Long): Flow<List<SessionWithLogs>>
             @Query("SELECT * FROM sessions WHERE isPaid = 1 ORDER BY endTime DESC LIMIT 300") fun paidSessions(): Flow<List<Session>>
             @Query("SELECT * FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to ORDER BY endTime DESC")
             suspend fun sessionsBetween(from: Long, to: Long): List<Session>
             @Query("SELECT * FROM sessions WHERE customerId = :cid AND isPaid = 1 ORDER BY endTime DESC")
             suspend fun sessionsOfCustomer(cid: Long): List<Session>
-            @Query("""UPDATE sessions SET endTime = :end, gameCost = :game, buffetCost = :buffet,
-                totalDurationMinutes = :dur, finalAmount = :fin WHERE id = :id""")
+            @Query("UPDATE sessions SET endTime = :end, gameCost = :game, buffetCost = :buffet, totalDurationMinutes = :dur, finalAmount = :fin, isPaid = 1 WHERE id = :id")
             suspend fun finalizeSession(id: Long, end: Long, game: Long, buffet: Long, dur: Long, fin: Long)
 
             @Insert suspend fun insertLog(l: SessionServiceLog): Long
@@ -350,8 +342,7 @@ jobs:
             @Insert suspend fun insertCustomer(c: Customer): Long
             @Update suspend fun updateCustomer(c: Customer)
             @Delete suspend fun deleteCustomer(c: Customer)
-            @Query("""UPDATE customers SET totalMinutes = :m, visitCount = :v, totalPaid = :p,
-                rewardProgressMinutes = :r, availableRewards = :w WHERE id = :id""")
+            @Query("UPDATE customers SET totalMinutes = :m, visitCount = :v, totalPaid = :p, rewardProgressMinutes = :r, availableRewards = :w WHERE id = :id")
             suspend fun updateCustomerStats(id: Long, m: Long, v: Int, p: Long, r: Long, w: Int)
             @Query("UPDATE customers SET availableRewards = :w WHERE id = :id") suspend fun setRewards(id: Long, w: Int)
 
@@ -368,14 +359,9 @@ jobs:
             @Query("SELECT SUM(gameCost) FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to") suspend fun gameSalesBetween(from: Long, to: Long): Long?
             @Query("SELECT COUNT(*) FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to") suspend fun sessionCountBetween(from: Long, to: Long): Int
             @Query("SELECT SUM(totalDurationMinutes) FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to") suspend fun minutesBetween(from: Long, to: Long): Long?
-            @Query("""SELECT deviceName AS name, COUNT(*) AS c, SUM(gameCost) AS s FROM sessions
-                WHERE isPaid = 1 AND endTime BETWEEN :from AND :to
-                GROUP BY deviceName ORDER BY c DESC LIMIT 10""")
+            @Query("SELECT deviceName AS name, COUNT(*) AS c, SUM(gameCost) AS s FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to GROUP BY deviceName ORDER BY c DESC LIMIT 10")
             suspend fun topDevices(from: Long, to: Long): List<NameCount>
-            @Query("""SELECT productName AS name, SUM(quantity) AS c, SUM(quantity * unitPrice) AS s
-                FROM buffet_order_items WHERE orderId IN
-                (SELECT id FROM buffet_orders WHERE timestamp BETWEEN :from AND :to)
-                GROUP BY productName ORDER BY c DESC LIMIT 10""")
+            @Query("SELECT productName AS name, SUM(quantity) AS c, SUM(quantity * unitPrice) AS s FROM buffet_order_items WHERE orderId IN (SELECT id FROM buffet_orders WHERE timestamp BETWEEN :from AND :to) GROUP BY productName ORDER BY c DESC LIMIT 10")
             suspend fun topProducts(from: Long, to: Long): List<NameCount>
 
             @Query("SELECT * FROM settings WHERE `key` = :k") suspend fun getSetting(k: String): SettingEntry?
@@ -420,3 +406,1793 @@ jobs:
             }
           }
           KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/logic/PricingEngine.kt << 'KTEOF'
+          package com.cj.gamenet.logic
+
+          import com.cj.gamenet.data.SessionServiceLog
+
+          object PricingEngine {
+            const val HOUR_MS = 3_600_000L
+
+            fun costOfLog(log: SessionServiceLog, now: Long): Long {
+              val end = log.endTime ?: now
+              val ms = (end - log.startTime).coerceAtLeast(0L)
+              return ms * log.hourlyPrice / HOUR_MS
+            }
+
+            fun gameCost(logs: List<SessionServiceLog>, now: Long = System.currentTimeMillis()): Long =
+              logs.sumOf { costOfLog(it, now) }
+
+            fun elapsedMs(logs: List<SessionServiceLog>, now: Long = System.currentTimeMillis()): Long =
+              logs.sumOf { ((it.endTime ?: now) - it.startTime).coerceAtLeast(0L) }
+
+            fun remaining(credit: Long, cost: Long): Long = credit - cost
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/logic/GameRepo.kt << 'KTEOF'
+          package com.cj.gamenet.logic
+
+          import com.cj.gamenet.data.*
+          import com.cj.gamenet.util.Fa
+
+          data class Report(
+            val from: Long, val to: Long,
+            val gameSales: Long, val buffetSales: Long,
+            val sessionCount: Int, val totalMinutes: Long,
+            val topProducts: List<NameCount>, val topDevices: List<NameCount>,
+            val sessions: List<Session>
+          ) { val totalSales get() = gameSales + buffetSales }
+
+          class GameRepo(val db: AppDatabase) {
+            val dao = db.dao()
+
+            suspend fun setting(key: String, def: String): String = dao.getSetting(key)?.value ?: def
+            suspend fun setSetting(key: String, value: String) = dao.putSetting(SettingEntry(key, value))
+
+            suspend fun ensureDefaults() {
+              mapOf(
+                Keys.NET_NAME to "گیم نت سی جی", Keys.NET_NAME_EN to "Game Net CJ",
+                Keys.CURRENCY to "تومان", Keys.REWARD_ENABLED to "true",
+                Keys.REWARD_HOURS to "4", Keys.REWARD_TITLE to "جایزه ۴ ساعته",
+                Keys.LOW_STOCK to "5", Keys.PIN_HASH to ""
+              ).forEach { (k, v) -> if (dao.getSetting(k) == null) dao.putSetting(SettingEntry(k, v)) }
+            }
+
+            suspend fun saveDevice(d: Device) { if (d.id == 0L) dao.insertDevice(d) else dao.updateDevice(d) }
+            suspend fun deleteDevice(d: Device) { dao.deleteServicesOf(d.id); dao.deleteDevice(d) }
+            suspend fun saveService(s: Service) { if (s.id == 0L) dao.insertService(s) else dao.updateService(s) }
+            suspend fun deleteService(s: Service) = dao.deleteService(s)
+            suspend fun servicesFor(deviceId: Long) = dao.servicesFor(deviceId)
+            suspend fun saveProduct(p: Product) { if (p.id == 0L) dao.insertProduct(p) else dao.updateProduct(p) }
+            suspend fun deleteProduct(p: Product) = dao.deleteProduct(p)
+            suspend fun saveCustomer(c: Customer): Long = if (c.id == 0L) dao.insertCustomer(c) else { dao.updateCustomer(c); c.id }
+            suspend fun deleteCustomer(c: Customer) = dao.deleteCustomer(c)
+            suspend fun consumeReward(cid: Long) {
+              dao.customer(cid)?.let { if (it.availableRewards > 0) dao.setRewards(cid, it.availableRewards - 1) }
+            }
+            suspend fun saveDiscount(d: Discount) { if (d.id == 0L) dao.insertDiscount(d) else dao.updateDiscount(d) }
+            suspend fun deleteDiscount(d: Discount) = dao.deleteDiscount(d)
+            suspend fun addReservation(r: Reservation) = dao.insertReservation(r)
+            suspend fun deleteReservation(r: Reservation) = dao.deleteReservation(r)
+            suspend fun customer(id: Long) = dao.customer(id)
+            suspend fun sessionsOf(cid: Long) = dao.sessionsOfCustomer(cid)
+            suspend fun buffetCostOf(sid: Long) = dao.buffetCostOf(sid) ?: 0L
+
+            suspend fun startSession(device: Device, service: Service, credit: Long, customer: Customer?): Long {
+              val now = System.currentTimeMillis()
+              val sid = dao.insertSession(
+                Session(deviceId = device.id, deviceName = device.name, startTime = now,
+                  initialCredit = credit, customerId = customer?.id,
+                  customerName = customer?.let { "${it.firstName} ${it.lastName}".trim() })
+              )
+              dao.insertLog(SessionServiceLog(sessionId = sid, serviceId = service.id, serviceName = service.name,
+                controllerCount = service.controllerCount, hourlyPrice = service.hourlyPrice, startTime = now))
+              dao.setDeviceStatus(device.id, "PLAYING")
+              return sid
+            }
+
+            suspend fun changeService(sessionId: Long, service: Service) {
+              val now = System.currentTimeMillis()
+              dao.closeOpenLog(sessionId, now)
+              dao.insertLog(SessionServiceLog(sessionId = sessionId, serviceId = service.id, serviceName = service.name,
+                controllerCount = service.controllerCount, hourlyPrice = service.hourlyPrice, startTime = now))
+            }
+
+            suspend fun buffetOrder(sessionId: Long?, customerId: Long?, cart: Map<Long, Int>) {
+              val now = System.currentTimeMillis()
+              var total = 0L
+              cart.forEach { (pid, q) -> total += (dao.product(pid)?.price ?: 0L) * q }
+              val oid = dao.insertOrder(BuffetOrder(sessionId, customerId, total, now, isPaid = sessionId == null))
+              cart.forEach { (pid, q) ->
+                val p = dao.product(pid) ?: return@forEach
+                dao.insertOrderItem(BuffetOrderItem(orderId = oid, productId = p.id, productName = p.name,
+                  unitPrice = p.price, quantity = q))
+                if (p.stock >= 0) dao.updateStock(p.id, (p.stock - q).coerceAtLeast(0))
+              }
+            }
+
+            suspend fun endSession(sessionId: Long, discount: Discount?): Session? {
+              val now = System.currentTimeMillis()
+              dao.closeOpenLog(sessionId, now)
+              val session = dao.session(sessionId) ?: return null
+              val logs = dao.logsOf(sessionId)
+              val game = PricingEngine.gameCost(logs, now)
+              val durMin = PricingEngine.elapsedMs(logs, now) / 60000
+              val buffet = dao.buffetCostOf(sessionId)
+              var total = game + buffet
+              if (discount != null) {
+                val d = discount.fixedAmount + total * discount.percent / 100
+                total = (total - d).coerceAtLeast(0)
+              }
+              dao.finalizeSession(sessionId, now, game, buffet, durMin, total)
+              dao.setDeviceStatus(session.deviceId, "FREE")
+              session.customerId?.let { cid ->
+                dao.customer(cid)?.let { c ->
+                  var progress = c.rewardProgressMinutes + durMin
+                  var gained = 0
+                  val enabled = setting(Keys.REWARD_ENABLED, "true").toBoolean()
+                  val thresholdMin = setting(Keys.REWARD_HOURS, "4").toLongOrNull() ?: 4L
+                  if (enabled && thresholdMin > 0) {
+                    while (progress >= thresholdMin * 60) { progress -= thresholdMin * 60; gained++ }
+                  }
+                  dao.updateCustomerStats(cid, c.totalMinutes + durMin, c.visitCount + 1,
+                    c.totalPaid + total, progress, c.availableRewards + gained)
+                }
+              }
+              return dao.session(sessionId)
+            }
+
+            suspend fun report(from: Long, to: Long): Report = Report(
+              from, to,
+              dao.gameSalesBetween(from, to) ?: 0, dao.buffetSalesBetween(from, to) ?: 0,
+              dao.sessionCountBetween(from, to), dao.minutesBetween(from, to) ?: 0,
+              dao.topProducts(from, to), dao.topDevices(from, to), dao.sessionsBetween(from, to)
+            )
+
+            suspend fun todaySales(): Pair<Long, Int> {
+              val s = Fa.startOfToday(); val now = System.currentTimeMillis()
+              return Pair((dao.gameSalesBetween(s, now) ?: 0) + (dao.buffetSalesBetween(s, now) ?: 0),
+                dao.buffetOrderCount(s, now))
+            }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/logic/BackupManager.kt << 'KTEOF'
+          package com.cj.gamenet.logic
+
+          import android.content.Context
+          import android.net.Uri
+          import androidx.room.withTransaction
+          import com.cj.gamenet.data.*
+          import kotlinx.coroutines.NonCancellable
+          import kotlinx.coroutines.withContext
+          import org.json.JSONArray
+          import org.json.JSONObject
+
+          object BackupManager {
+
+            private fun <T> arr(list: List<T>, f: (T) -> JSONObject) =
+              JSONArray().apply { list.forEach { put(f(it)) } }
+
+            suspend fun export(db: AppDatabase): String {
+              val d = db.dao()
+              val root = JSONObject().put("app", "GameNetCJ").put("version", 1).put("at", System.currentTimeMillis())
+              root.put("devices", arr(d.allDevices()) { o -> JSONObject()
+                .put("id", o.id).put("name", o.name).put("type", o.type).put("number", o.number)
+                .put("controllerCount", o.controllerCount).put("isActive", o.isActive).put("status", o.status) })
+              root.put("services", arr(d.allServices()) { o -> JSONObject()
+                .put("id", o.id).put("deviceId", o.deviceId).put("name", o.name)
+                .put("controllerCount", o.controllerCount).put("hourlyPrice", o.hourlyPrice).put("isActive", o.isActive) })
+              root.put("sessions", arr(d.allSessions()) { o -> JSONObject()
+                .put("id", o.id).put("deviceId", o.deviceId).put("deviceName", o.deviceName)
+                .put("customerId", o.customerId).put("customerName", o.customerName)
+                .put("startTime", o.startTime).put("endTime", o.endTime)
+                .put("initialCredit", o.initialCredit).put("gameCost", o.gameCost)
+                .put("buffetCost", o.buffetCost).put("totalDurationMinutes", o.totalDurationMinutes)
+                .put("finalAmount", o.finalAmount).put("isPaid", o.isPaid) })
+              root.put("logs", arr(d.logsOfAll()) { o -> JSONObject()
+                .put("id", o.id).put("sessionId", o.sessionId).put("serviceId", o.serviceId)
+                .put("serviceName", o.serviceName).put("controllerCount", o.controllerCount)
+                .put("hourlyPrice", o.hourlyPrice).put("startTime", o.startTime).put("endTime", o.endTime) })
+              root.put("products", arr(d.allProducts()) { o -> JSONObject()
+                .put("id", o.id).put("name", o.name).put("price", o.price).put("category", o.category)
+                .put("stock", o.stock).put("imageUri", o.imageUri).put("isActive", o.isActive) })
+              root.put("orders", arr(d.allOrders()) { o -> JSONObject()
+                .put("id", o.id).put("sessionId", o.sessionId).put("customerId", o.customerId)
+                .put("totalAmount", o.totalAmount).put("timestamp", o.timestamp).put("isPaid", o.isPaid) })
+              root.put("orderItems", arr(d.allOrderItems()) { o -> JSONObject()
+                .put("id", o.id).put("orderId", o.orderId).put("productId", o.productId)
+                .put("productName", o.productName).put("unitPrice", o.unitPrice).put("quantity", o.quantity) })
+              root.put("customers", arr(d.allCustomers()) { o -> JSONObject()
+                .put("id", o.id).put("firstName", o.firstName).put("lastName", o.lastName)
+                .put("phone", o.phone).put("notes", o.notes).put("joinDate", o.joinDate)
+                .put("totalMinutes", o.totalMinutes).put("visitCount", o.visitCount)
+                .put("totalPaid", o.totalPaid).put("rewardProgressMinutes", o.rewardProgressMinutes)
+                .put("availableRewards", o.availableRewards) })
+              root.put("reservations", arr(d.allReservations()) { o -> JSONObject()
+                .put("id", o.id).put("deviceId", o.deviceId).put("customerName", o.customerName)
+                .put("startTime", o.startTime).put("durationMinutes", o.durationMinutes).put("note", o.note) })
+              root.put("discounts", arr(d.allDiscounts()) { o -> JSONObject()
+                .put("id", o.id).put("title", o.title).put("percent", o.percent)
+                .put("fixedAmount", o.fixedAmount).put("startDate", o.startDate)
+                .put("endDate", o.endDate).put("isActive", o.isActive) })
+              root.put("settings", arr(d.allSettings()) { o -> JSONObject().put("key", o.key).put("value", o.value) })
+              return root.toString(2)
+            }
+
+            suspend fun restore(db: AppDatabase, text: String): Boolean = try {
+              val root = JSONObject(text)
+              val d = db.dao()
+              fun JSONArray.each(f: (JSONObject) -> Unit) { for (i in 0 until length()) f(getJSONObject(i)) }
+              withContext(NonCancellable) {
+                db.withTransaction {
+                  d.clearLogs(); d.clearOrderItems(); d.clearOrders(); d.clearSessions()
+                  d.clearProducts(); d.clearCustomers(); d.clearDevices(); d.clearServices()
+                  d.clearReservations(); d.clearDiscounts(); d.clearSettings()
+                  root.getJSONArray("devices").each { o -> d.insertDevice(Device(o.getLong("id"), o.getString("name"),
+                    o.getString("type"), o.getInt("number"), o.getInt("controllerCount"),
+                    o.getBoolean("isActive"), o.getString("status"))) }
+                  root.getJSONArray("services").each { o -> d.insertService(Service(o.getLong("id"),
+                    if (o.isNull("deviceId")) null else o.getLong("deviceId"), o.getString("name"),
+                    o.getInt("controllerCount"), o.getLong("hourlyPrice"), o.getBoolean("isActive"))) }
+                  root.getJSONArray("sessions").each { o -> d.insertSession(Session(o.getLong("id"),
+                    o.getLong("deviceId"), o.getString("deviceName"),
+                    if (o.isNull("customerId")) null else o.getLong("customerId"),
+                    if (o.isNull("customerName")) null else o.getString("customerName"),
+                    o.getLong("startTime"), if (o.isNull("endTime")) null else o.getLong("endTime"),
+                    o.getLong("initialCredit"), o.getLong("gameCost"), o.getLong("buffetCost"),
+                    o.getLong("totalDurationMinutes"), o.getLong("finalAmount"), o.getBoolean("isPaid"))) }
+                  root.getJSONArray("logs").each { o -> d.insertLog(SessionServiceLog(o.getLong("id"),
+                    o.getLong("sessionId"), if (o.isNull("serviceId")) null else o.getLong("serviceId"),
+                    o.getString("serviceName"), o.getInt("controllerCount"), o.getLong("hourlyPrice"),
+                    o.getLong("startTime"), if (o.isNull("endTime")) null else o.getLong("endTime"))) }
+                  root.getJSONArray("products").each { o -> d.insertProduct(Product(o.getLong("id"),
+                    o.getString("name"), o.getLong("price"), o.getString("category"), o.getInt("stock"),
+                    if (o.isNull("imageUri")) null else o.getString("imageUri"), o.getBoolean("isActive"))) }
+                  root.getJSONArray("orders").each { o -> d.insertOrder(BuffetOrder(o.getLong("id"),
+                    if (o.isNull("sessionId")) null else o.getLong("sessionId"),
+                    if (o.isNull("customerId")) null else o.getLong("customerId"),
+                    o.getLong("totalAmount"), o.getLong("timestamp"), o.getBoolean("isPaid"))) }
+                  root.getJSONArray("orderItems").each { o -> d.insertOrderItem(BuffetOrderItem(o.getLong("id"),
+                    o.getLong("orderId"), if (o.isNull("productId")) null else o.getLong("productId"),
+                    o.getString("productName"), o.getLong("unitPrice"), o.getInt("quantity"))) }
+                  root.getJSONArray("customers").each { o -> d.insertCustomer(Customer(o.getLong("id"),
+                    o.getString("firstName"), o.getString("lastName"),
+                    if (o.isNull("phone")) null else o.getString("phone"),
+                    if (o.isNull("notes")) null else o.getString("notes"), o.getLong("joinDate"),
+                    o.getLong("totalMinutes"), o.getInt("visitCount"), o.getLong("totalPaid"),
+                    o.getLong("rewardProgressMinutes"), o.getInt("availableRewards"))) }
+                  root.getJSONArray("reservations").each { o -> d.insertReservation(Reservation(o.getLong("id"),
+                    o.getLong("deviceId"), o.getString("customerName"), o.getLong("startTime"),
+                    o.getInt("durationMinutes"), if (o.isNull("note")) null else o.getString("note"))) }
+                  root.getJSONArray("discounts").each { o -> d.insertDiscount(Discount(o.getLong("id"),
+                    o.getString("title"), o.getInt("percent"), o.getLong("fixedAmount"),
+                    if (o.isNull("startDate")) null else o.getLong("startDate"),
+                    if (o.isNull("endDate")) null else o.getLong("endDate"), o.getBoolean("isActive"))) }
+                  root.getJSONArray("settings").each { o -> d.putSetting(SettingEntry(o.getString("key"), o.getString("value"))) }
+                }
+              }
+              true
+            } catch (e: Exception) { false }
+
+            fun readText(ctx: Context, uri: Uri): String =
+              ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
+
+            fun writeText(ctx: Context, uri: Uri, text: String) {
+              ctx.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+            }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/util/Fa.kt << 'KTEOF'
+          package com.cj.gamenet.util
+
+          import java.util.Calendar
+          import java.util.Locale
+
+          object Fa {
+            private const val FA = "۰۱۲۳۴۵۶۷۸۹"
+
+            fun digits(s: String) = buildString { for (c in s) append(if (c in '0'..'9') FA[c - '0'] else c) }
+            fun num(v: Long) = digits(String.format(Locale.US, "%,d", v))
+            fun num(v: Int) = num(v.toLong())
+            fun toman(v: Long, unit: String = "تومان") = "${num(v)} $unit"
+            fun timer(ms: Long): String {
+              val t = ms / 1000
+              return digits(String.format(Locale.US, "%02d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60))
+            }
+            fun duration(minutes: Long): String {
+              val h = minutes / 60; val m = minutes % 60
+              return when {
+                h > 0 && m > 0 -> "${num(h)} ساعت و ${num(m)} دقیقه"
+                h > 0 -> "${num(h)} ساعت"
+                else -> "${num(m)} دقیقه"
+              }
+            }
+            fun gregorianToJalali(gy: Int, gm: Int, gd: Int): IntArray {
+              val gDm = intArrayOf(0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+              val gy2 = if (gm > 2) gy + 1 else gy
+              var days = 355666 + 365 * gy + (gy2 + 3) / 4 - (gy2 + 99) / 100 + (gy2 + 399) / 400 + gd + gDm[gm - 1]
+              var jy = -1595 + 33 * (days / 12053); days %= 12053
+              jy += 4 * (days / 1461); days %= 1461
+              if (days > 365) { jy += (days - 1) / 365; days = (days - 1) % 365 }
+              val jm = if (days < 186) 1 + days / 31 else 7 + (days - 186) / 30
+              val jd = 1 + (if (days < 186) days % 31 else (days - 186) % 30)
+              return intArrayOf(jy, jm, jd)
+            }
+            fun date(ms: Long): String {
+              val c = Calendar.getInstance().apply { timeInMillis = ms }
+              val j = gregorianToJalali(c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH))
+              return digits(String.format(Locale.US, "%d/%02d/%02d", j[0], j[1], j[2]))
+            }
+            fun time(ms: Long): String {
+              val c = Calendar.getInstance().apply { timeInMillis = ms }
+              return digits(String.format(Locale.US, "%02d:%02d", c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE)))
+            }
+            private fun startOf(week: Boolean, field: Int, value: Int): Long =
+              Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                firstDayOfWeek = Calendar.SATURDAY
+                if (week) set(field, value)
+              }.timeInMillis
+            fun startOfToday() = startOf(false, 0, 0)
+            fun startOfWeek() = startOf(true, Calendar.DAY_OF_WEEK, Calendar.SATURDAY)
+            fun startOfMonth() = startOf(true, Calendar.DAY_OF_MONTH, 1)
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/Theme.kt << 'KTEOF'
+          package com.cj.gamenet.ui
+
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.graphics.Color
+
+          val Bg = Color(0xFF0C0812)
+          val SurfaceDark = Color(0xFF171021)
+          val CardBg = Color(0xFF1E1530)
+          val Purple = Color(0xFF8B5CF6)
+          val PurpleLight = Color(0xFFA78BFA)
+          val Gold = Color(0xFFFFC94D)
+          val GoldDark = Color(0xFF3A2C10)
+          val Green = Color(0xFF4ADE80)
+          val Red = Color(0xFFF87171)
+          val Yellow = Color(0xFFFACC15)
+          val TextMain = Color(0xFFEDE9FE)
+          val TextDim = Color(0xFF9C93B3)
+
+          @Composable
+          fun CJTheme(content: @Composable () -> Unit) {
+            MaterialTheme(
+              colorScheme = darkColorScheme(
+                primary = Purple, onPrimary = Color.White,
+                secondary = PurpleLight, tertiary = Gold,
+                background = Bg, onBackground = TextMain,
+                surface = SurfaceDark, onSurface = TextMain,
+                surfaceVariant = CardBg, onSurfaceVariant = TextDim,
+                error = Red
+              ),
+              content = content
+            )
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/Components.kt << 'KTEOF'
+          package com.cj.gamenet.ui
+
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.text.KeyboardOptions
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.input.KeyboardType
+          import androidx.compose.ui.unit.dp
+
+          @Composable
+          fun StatCard(title: String, value: String, gold: Boolean = false, modifier: Modifier = Modifier) {
+            Card(modifier, shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = if (gold) GoldDark else CardBg)) {
+              Column(Modifier.padding(12.dp)) {
+                Text(title, style = MaterialTheme.typography.bodySmall, color = TextDim)
+                Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = if (gold) Gold else TextMain)
+              }
+            }
+          }
+
+          @Composable
+          fun LabeledNum(label: String, value: String, onChange: (String) -> Unit, hint: String = "") {
+            OutlinedTextField(value, onChange, label = { Text(label) },
+              placeholder = { if (hint.isNotBlank()) Text(hint) },
+              modifier = Modifier.fillMaxWidth(), singleLine = true,
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+          }
+
+          @Composable
+          fun LabeledText(label: String, value: String, onChange: (String) -> Unit) {
+            OutlinedTextField(value, onChange, label = { Text(label) },
+              modifier = Modifier.fillMaxWidth(), singleLine = true)
+          }
+
+          @Composable
+          fun ConfirmDialog(title: String, text: String, yes: String = "بله، حذف کن", onYes: () -> Unit, onDismiss: () -> Unit) {
+            AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { Text(text) },
+              confirmButton = { TextButton(onYes) { Text(yes, color = Red) } },
+              dismissButton = { TextButton(onDismiss) { Text("انصراف") } })
+          }
+
+          @Composable
+          fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+            Text(text, style = MaterialTheme.typography.titleMedium, color = Gold, fontWeight = FontWeight.Bold, modifier = modifier.padding(vertical = 8.dp))
+          }
+
+          @Composable
+          fun RowCenter(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+            Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, content = content)
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/AppViewModel.kt << 'KTEOF'
+          package com.cj.gamenet.ui
+
+          import android.app.Application
+          import android.content.Context
+          import android.net.Uri
+          import androidx.lifecycle.*
+          import com.cj.gamenet.data.*
+          import com.cj.gamenet.logic.BackupManager
+          import com.cj.gamenet.logic.GameRepo
+          import kotlinx.coroutines.flow.*
+          import kotlinx.coroutines.launch
+          import java.security.MessageDigest
+
+          class AppViewModel(val repo: GameRepo) : ViewModel() {
+            val dao = repo.dao
+            val devices = dao.devices().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val services = dao.services().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val activeSessions = dao.activeWithLogs().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val paidSessions = dao.paidSessions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val products = dao.products().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val customers = dao.customers().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val reservations = dao.reservations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val discounts = dao.discounts().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val settings = dao.settingsFlow().map { l -> l.associate { it.key to it.value } }
+              .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+            init { viewModelScope.launch { repo.ensureDefaults() } }
+            fun s(key: String, def: String) = settings.value[key] ?: def
+
+            private fun go(block: suspend () -> Unit) = viewModelScope.launch { block() }
+            fun saveDevice(d: Device) = go { repo.saveDevice(d) }
+            fun deleteDevice(d: Device) = go { repo.deleteDevice(d) }
+            fun saveService(s: Service) = go { repo.saveService(s) }
+            fun deleteService(s: Service) = go { repo.deleteService(s) }
+            fun saveProduct(p: Product) = go { repo.saveProduct(p) }
+            fun deleteProduct(p: Product) = go { repo.deleteProduct(p) }
+            fun saveCustomer(c: Customer) = go { repo.saveCustomer(c) }
+            fun deleteCustomer(c: Customer) = go { repo.deleteCustomer(c) }
+            fun consumeReward(id: Long) = go { repo.consumeReward(id) }
+            fun saveDiscount(d: Discount) = go { repo.saveDiscount(d) }
+            fun deleteDiscount(d: Discount) = go { repo.deleteDiscount(d) }
+            fun addReservation(r: Reservation) = go { repo.addReservation(r) }
+            fun deleteReservation(r: Reservation) = go { repo.deleteReservation(r) }
+            fun setSetting(k: String, v: String) = go { repo.setSetting(k, v) }
+            fun startSession(device: Device, service: Service, credit: Long, customer: Customer?, onDone: (Long) -> Unit) =
+              viewModelScope.launch { onDone(repo.startSession(device, service, credit, customer)) }
+            fun changeService(sid: Long, s: Service) = go { repo.changeService(sid, s) }
+            fun buffetOrder(sid: Long?, cid: Long?, cart: Map<Long, Int>) = go { repo.buffetOrder(sid, cid, cart) }
+            fun endSession(sid: Long, discount: Discount?, onDone: () -> Unit) =
+              viewModelScope.launch { repo.endSession(sid, discount); onDone() }
+
+            suspend fun servicesFor(id: Long) = repo.servicesFor(id)
+            suspend fun buffetCostOf(sid: Long) = repo.buffetCostOf(sid)
+            suspend fun customerOf(id: Long) = repo.customer(id)
+            suspend fun sessionsOf(id: Long) = repo.sessionsOf(id)
+            suspend fun report(f: Long, t: Long) = repo.report(f, t)
+            suspend fun todaySales() = repo.todaySales()
+            suspend fun addCustomer(c: Customer): Long = repo.saveCustomer(c)
+            fun observeSession(id: Long): Flow<List<SessionWithLogs>> = dao.sessionWithLogsFlow(id)
+
+            fun pinEnabled() = s(Keys.PIN_HASH, "").isNotBlank()
+            fun checkPin(pin: String, onResult: (Boolean) -> Unit) = onResult(sha(pin) == s(Keys.PIN_HASH, ""))
+            fun setPin(pin: String) = setSetting(Keys.PIN_HASH, sha(pin))
+            fun removePin() = setSetting(Keys.PIN_HASH, "")
+            private fun sha(s: String) = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
+              .joinToString("") { "%02x".format(it) }
+
+            fun backup(ctx: Context, uri: Uri, onMsg: (String) -> Unit) = viewModelScope.launch {
+              runCatching { BackupManager.writeText(ctx, uri, BackupManager.export(repo.db)) }
+                .onSuccess { onMsg("✅ پشتیبان‌گیری انجام شد") }
+                .onFailure { onMsg("❌ خطا در پشتیبان‌گیری") }
+            }
+            fun restore(ctx: Context, uri: Uri, onMsg: (String) -> Unit) = viewModelScope.launch {
+              val ok = runCatching { BackupManager.restore(repo.db, BackupManager.readText(ctx, uri)) }.getOrDefault(false)
+              onMsg(if (ok) "✅ بازیابی اطلاعات انجام شد" else "❌ فایل پشتیبان نامعتبر است")
+            }
+
+            companion object {
+              fun factory(app: Application) = object : ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : ViewModel> create(c: Class<T>): T =
+                  AppViewModel((app as com.cj.gamenet.GameNetApp).repo) as T
+              }
+            }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/AppRoot.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.navigation.NavType
+          import androidx.navigation.compose.*
+          import androidx.navigation.navArgument
+          import com.cj.gamenet.ui.AppViewModel
+
+          private val tabs = listOf(
+            Triple("dashboard", "داشبورد", Icons.Filled.Home),
+            Triple("devices", "دستگاه‌ها", Icons.Filled.SportsEsports),
+            Triple("buffet", "بوفه", Icons.Filled.LocalCafe),
+            Triple("customers", "مشتریان", Icons.Filled.Groups),
+            Triple("reports", "گزارش‌ها", Icons.Filled.BarChart)
+          )
+
+          @Composable
+          fun AppRoot(vm: AppViewModel) {
+            val nav = rememberNavController()
+            val backStack by nav.currentBackStackEntryAsState()
+            val route = backStack?.destination?.route ?: "dashboard"
+            val showBar = tabs.any { it.first == route }
+
+            Scaffold(bottomBar = {
+              if (showBar) NavigationBar {
+                tabs.forEach { (r, label, icon) ->
+                  NavigationBarItem(selected = route == r, onClick = {
+                    nav.navigate(r) {
+                      popUpTo("dashboard") { saveState = true }
+                      launchSingleTop = true; restoreState = true
+                    }
+                  }, label = { Text(label) }, icon = { Icon(icon, null) })
+                }
+              }
+            }) { pad ->
+              NavHost(nav, "dashboard", Modifier.padding(pad)) {
+                composable("dashboard") { DashboardScreen(vm) { r -> nav.navigate(r) } }
+                composable("devices") { DevicesScreen(vm) { r -> nav.navigate(r) } }
+                composable("buffet") { BuffetScreen(vm) }
+                composable("customers") { CustomersScreen(vm) { r -> nav.navigate(r) } }
+                composable("reports") { ReportsScreen(vm) { r -> nav.navigate(r) } }
+                composable("session/{id}", listOf(navArgument("id") { type = NavType.LongType })) {
+                  ActiveSessionScreen(vm, it.arguments?.getLong("id") ?: 0) { nav.popBackStack() }
+                }
+                composable("customer/{id}", listOf(navArgument("id") { type = NavType.LongType })) {
+                  CustomerProfileScreen(vm, it.arguments?.getLong("id") ?: 0) { nav.popBackStack() }
+                }
+                composable("transactions") { TransactionsScreen(vm) { nav.popBackStack() } }
+                composable("reservations") { ReservationsScreen(vm) { nav.popBackStack() } }
+                composable("settings") { SettingsScreen(vm) }
+              }
+            }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/DashboardScreen.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.grid.*
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import com.cj.gamenet.data.Keys
+          import com.cj.gamenet.ui.*
+          import com.cj.gamenet.util.Fa
+          import kotlinx.coroutines.delay
+
+          @Composable
+          fun DashboardScreen(vm: AppViewModel, go: (String) -> Unit) {
+            val devices by vm.devices.collectAsState()
+            val active by vm.activeSessions.collectAsState()
+            val reservations by vm.reservations.collectAsState()
+            val customers by vm.customers.collectAsState()
+            var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+            var todaySales by remember { mutableLongStateOf(0L) }
+            var buffetCount by remember { mutableIntStateOf(0) }
+
+            LaunchedEffect(Unit) { while (true) { delay(30000); now = System.currentTimeMillis() } }
+            LaunchedEffect(active.size) { val r = vm.todaySales(); todaySales = r.first; buffetCount = r.second }
+
+            val reservedNow = reservations.count { it.startTime <= now && it.startTime + it.durationMinutes * 60000L >= now }
+            val free = devices.count { it.isActive && active.none { s -> s.session.deviceId == it.id } }
+
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+              RowCenter {
+                Column(Modifier.weight(1f)) {
+                  Text(vm.s(Keys.NET_NAME, "گیم نت سی جی"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold)
+                  Text("پنل مدیریت حرفه‌ای", style = MaterialTheme.typography.bodySmall, color = TextDim)
+                }
+                IconButton({ go("settings") }) { Icon(Icons.Filled.Settings, null, tint = PurpleLight) }
+              }
+              Spacer(Modifier.height(12.dp))
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("در حال بازی", Fa.num(active.size), modifier = Modifier.weight(1f))
+                StatCard("آزاد", Fa.num(free), modifier = Modifier.weight(1f))
+              }
+              Spacer(Modifier.height(8.dp))
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("رزرو شده", Fa.num(reservedNow), modifier = Modifier.weight(1f))
+                StatCard("غیرفعال", Fa.num((devices.size - active.size - free - reservedNow).coerceAtLeast(0)), modifier = Modifier.weight(1f))
+              }
+              Spacer(Modifier.height(8.dp))
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("فروش امروز", Fa.toman(todaySales), gold = true, modifier = Modifier.weight(1f))
+                StatCard("سفارش بوفه امروز", Fa.num(buffetCount), modifier = Modifier.weight(1f))
+              }
+              Spacer(Modifier.height(8.dp))
+              StatCard("مشتریان ثبت‌شده", Fa.num(customers.size), modifier = Modifier.fillMaxWidth())
+              Spacer(Modifier.height(16.dp))
+              SectionTitle("میانبرهای سریع")
+              val labels = listOf("شروع بازی", "بوفه", "باشگاه مشتریان", "گزارش فروش", "رزرو دستگاه", "افزودن دستگاه")
+              val routes = listOf("devices", "buffet", "customers", "reports", "reservations", "devices")
+              LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.height(240.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+                userScrollEnabled = false) {
+                items(labels.size) { i ->
+                  Card(onClick = { go(routes[i]) }, colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    Box(Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.Center) {
+                      Text(labels[i], color = PurpleLight, fontWeight = FontWeight.Bold)
+                    }
+                  }
+                }
+              }
+            }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/DevicesScreen.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.*
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import com.cj.gamenet.data.*
+          import com.cj.gamenet.logic.PricingEngine
+          import com.cj.gamenet.ui.*
+          import com.cj.gamenet.util.Fa
+          import kotlinx.coroutines.delay
+          import kotlinx.coroutines.launch
+
+          @Composable
+          fun DevicesScreen(vm: AppViewModel, go: (String) -> Unit) {
+            val devices by vm.devices.collectAsState()
+            val active by vm.activeSessions.collectAsState()
+            val reservations by vm.reservations.collectAsState()
+            var search by remember { mutableStateOf("") }
+            var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+            var addDevice by remember { mutableStateOf(false) }
+            var editDevice by remember { mutableStateOf<Device?>(null) }
+            var startFor by remember { mutableStateOf<Device?>(null) }
+
+            LaunchedEffect(Unit) { while (true) { delay(15000); now = System.currentTimeMillis() } }
+
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+              RowCenter {
+                Text("دستگاه‌ها", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold, modifier = Modifier.weight(1f))
+                IconButton({ go("reservations") }) { Icon(Icons.Filled.Event, null, tint = PurpleLight) }
+                IconButton({ addDevice = true }) { Icon(Icons.Filled.Add, null, tint = Gold) }
+              }
+              Spacer(Modifier.height(8.dp))
+              OutlinedTextField(search, { search = it }, label = { Text("🔍 جستجوی دستگاه") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+              Spacer(Modifier.height(8.dp))
+              LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(devices.filter { it.name.contains(search, true) || it.type.contains(search, true) }) { d ->
+                  val swl = active.find { it.session.deviceId == d.id }
+                  val reserved = reservations.any { it.deviceId == d.id && it.startTime <= now && it.startTime + it.durationMinutes * 60000L >= now }
+                  val status = when { !d.isActive -> "DISABLED"; swl != null -> "PLAYING"; reserved -> "RESERVED"; else -> "FREE" }
+                  DeviceCard(d, swl, status,
+                    onStart = { startFor = d },
+                    onManage = { swl?.let { go("session/${it.session.id}") } },
+                    onEdit = { editDevice = d })
+                }
+              }
+            }
+            if (addDevice) DeviceEditorDialog(vm, null) { addDevice = false }
+            editDevice?.let { DeviceEditorDialog(vm, it) { editDevice = null } }
+            startFor?.let { d -> StartSessionDialog(vm, d, onDismiss = { startFor = null }, onStarted = { id -> startFor = null; go("session/$id") }) }
+          }
+
+          @Composable
+          fun DeviceCard(d: Device, swl: SessionWithLogs?, status: String, onStart: () -> Unit, onManage: () -> Unit, onEdit: () -> Unit) {
+            var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
+            val (dot, label) = when (status) {
+              "PLAYING" -> Red to "🔴 در حال بازی"
+              "RESERVED" -> Yellow to "🟡 رزرو شده"
+              "DISABLED" -> TextDim to "⚫ غیرفعال"
+              else -> Green to "🟢 آزاد"
+            }
+            Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+              Column(Modifier.padding(14.dp)) {
+                RowCenter {
+                  Text("🎮 ${d.name}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                  Text(label, color = dot, style = MaterialTheme.typography.bodySmall)
+                }
+                if (status == "PLAYING" && swl != null) {
+                  val cost = PricingEngine.gameCost(swl.logs, now)
+                  val elapsed = PricingEngine.elapsedMs(swl.logs, now)
+                  val remain = PricingEngine.remaining(swl.session.initialCredit, cost)
+                  Spacer(Modifier.height(6.dp))
+                  Text("مشتری: ${swl.session.customerName ?: "بدون مشتری"}", color = TextDim)
+                  Text("⏱ زمان: ${Fa.timer(elapsed)}", color = TextMain, fontWeight = FontWeight.Bold)
+                  RowCenter {
+                    Text("💰 هزینه: ${Fa.toman(cost)}", color = Gold, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    if (swl.session.initialCredit > 0)
+                      Text("باقی‌مانده: ${Fa.toman(remain)}", color = if (remain <= 0) Red else Green, style = MaterialTheme.typography.bodySmall)
+                  }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                  when (status) {
+                    "FREE", "RESERVED" -> {
+                      Button(onStart, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Purple)) {
+                        Icon(Icons.Filled.PlayArrow, null); Text("شروع بازی")
+                      }
+                    }
+                    "PLAYING" -> {
+                      OutlinedButton(onManage, Modifier.weight(1f)) { Text("مدیریت") }
+                      Button(onManage, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Red)) { Text("پایان بازی") }
+                    }
+                    else -> {
+                      OutlinedButton({}, Modifier.weight(1f), enabled = false) { Text("غیرفعال") }
+                    }
+                  }
+                  IconButton(onEdit) { Icon(Icons.Filled.Edit, null, tint = PurpleLight) }
+                }
+              }
+            }
+          }
+
+          @Composable
+          fun DeviceEditorDialog(vm: AppViewModel, initial: Device?, onDismiss: () -> Unit) {
+            var name by remember { mutableStateOf(initial?.name ?: "") }
+            var type by remember { mutableStateOf(initial?.type ?: "") }
+            var number by remember { mutableStateOf((initial?.number ?: 1).toString()) }
+            var controllers by remember { mutableStateOf((initial?.controllerCount ?: 4).toString()) }
+            var isActive by remember { mutableStateOf(initial?.isActive ?: true) }
+            var confirmDelete by remember { mutableStateOf(false) }
+            AlertDialog(onDismissRequest = onDismiss,
+              title = { Text(if (initial == null) "افزودن دستگاه" else "ویرایش دستگاه") },
+              text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  LabeledText("نام دستگاه (مثلاً PS5 شماره ۱)", name) { name = it }
+                  LabeledText("نوع (PS5 / PS4 / PC / Xbox ...)", type) { type = it }
+                  LabeledNum("شماره دستگاه", number) { number = it }
+                  LabeledNum("تعداد دسته", controllers) { controllers = it }
+                  RowCenter { Text("فعال", Modifier.weight(1f)); Switch(isActive, { isActive = it }) }
+                  Text("💡 قیمت هر تعداد دسته را از تنظیمات ← مدیریت سرویس‌ها تعیین کنید.", style = MaterialTheme.typography.bodySmall, color = TextDim)
+                }
+              },
+              confirmButton = {
+                TextButton({
+                  if (name.isNotBlank()) vm.saveDevice(Device(initial?.id ?: 0, name.trim(),
+                    type.trim().ifBlank { "دستگاه" }, number.toIntOrNull() ?: 1, controllers.toIntOrNull() ?: 4, isActive))
+                  onDismiss()
+                }) { Text("ذخیره", color = Gold) }
+              },
+              dismissButton = {
+                Row {
+                  if (initial != null) TextButton({ confirmDelete = true }) { Text("حذف", color = Red) }
+                  TextButton(onDismiss) { Text("انصراف") }
+                }
+              })
+            if (confirmDelete) ConfirmDialog("حذف دستگاه", "«${initial?.name}» حذف شود؟",
+              onYes = { vm.deleteDevice(initial!!); confirmDelete = false; onDismiss() },
+              onDismiss = { confirmDelete = false })
+          }
+
+          @Composable
+          fun StartSessionDialog(vm: AppViewModel, device: Device, onDismiss: () -> Unit, onStarted: (Long) -> Unit) {
+            var services by remember { mutableStateOf<List<Service>>(emptyList()) }
+            var selected by remember { mutableStateOf<Service?>(null) }
+            var credit by remember { mutableStateOf("") }
+            val customers by vm.customers.collectAsState()
+            var customerId by remember { mutableStateOf<Long?>(null) }
+            var showNewCustomer by remember { mutableStateOf(false) }
+
+            LaunchedEffect(device.id) {
+              services = vm.servicesFor(device.id)
+              if (selected == null) selected = services.firstOrNull()
+            }
+            AlertDialog(onDismissRequest = onDismiss, title = { Text("🎮 ${device.name} — شروع بازی") },
+              text = {
+                Column {
+                  if (services.isEmpty()) {
+                    Text("⚠️ برای این دستگاه سرویس/قیمتی تعریف نشده.\nاز تنظیمات ← مدیریت سرویس‌ها اضافه کنید.", color = Red)
+                  } else {
+                    Text("سرویس / تعداد دسته:", color = TextDim)
+                    services.forEach { s ->
+                      Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected?.id == s.id, { selected = s })
+                        Column(Modifier.weight(1f)) {
+                          Text("${s.name} (${Fa.num(s.controllerCount)} دسته)")
+                          Text("${Fa.toman(s.hourlyPrice)} / ساعت", style = MaterialTheme.typography.bodySmall, color = Gold)
+                        }
+                      }
+                    }
+                  }
+                  Spacer(Modifier.height(8.dp))
+                  LabeledNum("مبلغ اولیه (تومان) — اختیاری", credit, hint = "0")
+                  Spacer(Modifier.height(8.dp))
+                  Text("مشتری (اختیاری):", color = TextDim)
+                  Column(Modifier.heightIn(max = 130.dp).verticalScroll(rememberScrollState())) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                      RadioButton(customerId == null, { customerId = null }); Text("بدون مشتری")
+                    }
+                    customers.forEach { c ->
+                      Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(customerId == c.id, { customerId = c.id }); Text("${c.firstName} ${c.lastName}")
+                      }
+                    }
+                    TextButton({ showNewCustomer = true }) { Text("➕ مشتری جدید...") }
+                  }
+                }
+              },
+              confirmButton = {
+                TextButton(enabled = selected != null, onClick = {
+                  val s = selected ?: return@TextButton
+                  vm.startSession(device, s, credit.toLongOrNull() ?: 0,
+                    customerId?.let { cid -> customers.find { it.id == cid } }) { onStarted(it) }
+                }) { Text("▶ شروع", color = Gold) }
+              },
+              dismissButton = { TextButton(onDismiss) { Text("انصراف") } })
+
+            if (showNewCustomer) QuickCustomerDialog(vm) { c ->
+              showNewCustomer = false
+              if (c != null) customerId = c.id
+            }
+          }
+
+          @Composable
+          fun QuickCustomerDialog(vm: AppViewModel, onResult: (Customer?) -> Unit) {
+            var f by remember { mutableStateOf("") }
+            var l by remember { mutableStateOf("") }
+            val scope = rememberCoroutineScope()
+            AlertDialog(onDismissRequest = { onResult(null) }, title = { Text("مشتری جدید") },
+              text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LabeledText("نام *", f) { f = it }; LabeledText("نام خانوادگی", l) { l = it } } },
+              confirmButton = {
+                TextButton(onClick = {
+                  if (f.isNotBlank()) scope.launch {
+                    val id = vm.addCustomer(Customer(firstName = f.trim(), lastName = l.trim()))
+                    onResult(vm.customerOf(id))
+                  } else onResult(null)
+                }) { Text("ذخیره", color = Gold) }
+              },
+              dismissButton = { TextButton({ onResult(null) }) { Text("انصراف") } })
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/ActiveSessionScreen.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import com.cj.gamenet.data.*
+          import com.cj.gamenet.logic.PricingEngine
+          import com.cj.gamenet.ui.*
+          import com.cj.gamenet.util.Fa
+          import kotlinx.coroutines.delay
+
+          @Composable
+          fun ActiveSessionScreen(vm: AppViewModel, sessionId: Long, onFinished: () -> Unit) {
+            val swlState by vm.observeSession(sessionId).collectAsState(initial = null)
+            var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+            var changeService by remember { mutableStateOf(false) }
+            var orderBuffet by remember { mutableStateOf(false) }
+            var endSession by remember { mutableStateOf(false) }
+
+            LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
+
+            val s = swlState?.firstOrNull() ?: return
+            val logs = s.logs
+            val cost = PricingEngine.gameCost(logs, now)
+            val elapsed = PricingEngine.elapsedMs(logs, now)
+            val remain = PricingEngine.remaining(s.session.initialCredit, cost)
+            val current = logs.lastOrNull { it.endTime == null }
+            val creditOver = s.session.initialCredit > 0 && remain <= 0
+
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+              Text("🎮 ${s.session.deviceName}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold)
+              Text("مشتری: ${s.session.customerName ?: "بدون مشتری"}", color = TextDim)
+              Spacer(Modifier.height(16.dp))
+              if (creditOver) Card(colors = CardDefaults.cardColors(containerColor = Red)) {
+                Text("⚠️ هشدار: اعتبار مشتری به پایان رسیده است!", Modifier.padding(12.dp), color = Color.White, fontWeight = FontWeight.Bold)
+              }
+              Spacer(Modifier.height(12.dp))
+              StatCard("⏱ زمان بازی", Fa.timer(elapsed), modifier = Modifier.fillMaxWidth())
+              Spacer(Modifier.height(8.dp))
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("سرویس فعلی", current?.serviceName ?: "-", modifier = Modifier.weight(1f))
+                StatCard("هزینه فعلی", Fa.toman(cost), gold = true, modifier = Modifier.weight(1f))
+              }
+              if (s.session.initialCredit > 0) {
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                  StatCard("اعتبار اولیه", Fa.toman(s.session.initialCredit), modifier = Modifier.weight(1f))
+                  StatCard("باقی‌مانده", Fa.toman(remain.coerceAtLeast(0)), gold = !creditOver, modifier = Modifier.weight(1f))
+                }
+              }
+              Spacer(Modifier.height(16.dp))
+              Button({ changeService = true }, Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("🔄 تغییر سرویس / دسته") }
+              Spacer(Modifier.height(8.dp))
+              Button({ orderBuffet = true }, Modifier.fillMaxWidth()) { Text("🥤 سفارش بوفه") }
+              Spacer(Modifier.height(8.dp))
+              Button({ endSession = true }, Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Gold)) {
+                Text("⏹ پایان بازی و تسویه", color = Color.Black, fontWeight = FontWeight.Bold)
+              }
+              Spacer(Modifier.height(16.dp))
+              SectionTitle("سوابق سرویس این جلسه")
+              logs.forEach { l ->
+                RowCenter(Modifier.padding(vertical = 4.dp)) {
+                  Text("${Fa.time(l.startTime)} — ${l.endTime?.let { Fa.time(it) } ?: "اکنون"}", color = TextDim, modifier = Modifier.weight(1f))
+                  Text("${l.serviceName} • ${Fa.toman(PricingEngine.costOfLog(l, now))}", color = TextMain)
+                }
+              }
+            }
+
+            if (changeService) ChangeServiceDialog(vm, s) { changeService = false }
+            if (orderBuffet) BuffetOrderDialog(vm, s) { orderBuffet = false }
+            if (endSession) EndSessionDialog(vm, s, cost, elapsed,
+              onDismiss = { endSession = false },
+              onDone = { endSession = false; onFinished() })
+          }
+
+          @Composable
+          fun ChangeServiceDialog(vm: AppViewModel, swl: SessionWithLogs, onDismiss: () -> Unit) {
+            var services by remember { mutableStateOf<List<Service>>(emptyList()) }
+            var selected by remember { mutableStateOf<Service?>(null) }
+            LaunchedEffect(swl.session.deviceId) {
+              services = vm.servicesFor(swl.session.deviceId)
+              selected = services.firstOrNull()
+            }
+            AlertDialog(onDismissRequest = onDismiss, title = { Text("تغییر سرویس (بدون توقف بازی)") },
+              text = {
+                Column {
+                  services.forEach { svc ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                      RadioButton(selected?.id == svc.id, { selected = svc })
+                      Text("${svc.name} — ${Fa.toman(svc.hourlyPrice)}/ساعت")
+                    }
+                  }
+                }
+              },
+              confirmButton = { TextButton({ selected?.let { vm.changeService(swl.session.id, it) }; onDismiss() }) { Text("ثبت تغییر", color = Gold) } },
+              dismissButton = { TextButton(onDismiss) { Text("انصراف") } })
+          }
+
+          @Composable
+          fun BuffetOrderDialog(vm: AppViewModel, swl: SessionWithLogs, onDismiss: () -> Unit) {
+            val products by vm.products.collectAsState()
+            val cart = remember { mutableStateMapOf<Long, Int>() }
+            AlertDialog(onDismissRequest = onDismiss,
+              title = { Text("🥤 سفارش بوفه — ${swl.session.deviceName}") },
+              text = {
+                Column {
+                  val active = products.filter { it.isActive }
+                  if (active.isEmpty()) Text("محصولی ثبت نشده. از تب بوفه اضافه کنید.", color = TextDim)
+                  Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    active.forEach { p ->
+                      val q = cart[p.id] ?: 0
+                      RowCenter(Modifier.padding(vertical = 4.dp)) {
+                        Column(Modifier.weight(1f)) {
+                          Text(p.name)
+                          Text("${Fa.toman(p.price)}" + if (p.stock >= 0) " • موجودی: ${Fa.num(p.stock)}" else "",
+                            style = MaterialTheme.typography.bodySmall, color = TextDim)
+                        }
+                        IconButton({ if (q > 0) cart[p.id] = q - 1 }, enabled = q > 0) { Text("➖") }
+                        Text(Fa.num(q), fontWeight = FontWeight.Bold)
+                        IconButton({ cart[p.id] = q + 1 }) { Text("➕") }
+                      }
+                    }
+                  }
+                  val sum = cart.entries.sumOf { (pid, q) -> (products.find { it.id == pid }?.price ?: 0L) * q }
+                  Spacer(Modifier.height(8.dp))
+                  Text("جمع سفارش: ${Fa.toman(sum)}", color = Gold, fontWeight = FontWeight.Bold)
+                }
+              },
+              confirmButton = { TextButton({
+                if (cart.isNotEmpty()) vm.buffetOrder(swl.session.id, swl.session.customerId, cart.toMap())
+                onDismiss()
+              }) { Text("ثبت سفارش", color = Gold) } },
+              dismissButton = { TextButton(onDismiss) { Text("انصراف") } })
+          }
+
+          @Composable
+          fun EndSessionDialog(vm: AppViewModel, swl: SessionWithLogs, liveCost: Long, elapsedMs: Long,
+                               onDismiss: () -> Unit, onDone: () -> Unit) {
+            var buffet by remember { mutableLongStateOf(0L) }
+            val discounts by vm.discounts.collectAsState()
+            var discount by remember { mutableStateOf<Discount?>(null) }
+            LaunchedEffect(Unit) { buffet = vm.buffetCostOf(swl.session.id) }
+            val activeDiscounts = discounts.filter { it.isActive }
+            val sub = liveCost + buffet
+            val dAmount = discount?.let { it.fixedAmount + sub * it.percent / 100 } ?: 0
+            val fin = (sub - dAmount).coerceAtLeast(0)
+
+            AlertDialog(onDismissRequest = onDismiss,
+              title = { Text("پایان بازی و تسویه", color = Gold) },
+              text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                  Text("مدت بازی: ${Fa.timer(elapsedMs)}", fontWeight = FontWeight.Bold)
+                  Text("هزینه بازی: ${Fa.toman(liveCost)}")
+                  Text("بوفه: ${Fa.toman(buffet)}")
+                  if (activeDiscounts.isNotEmpty()) {
+                    Text("تخفیف:", color = TextDim)
+                    activeDiscounts.forEach { dd ->
+                      Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(discount?.id == dd.id, { discount = if (discount?.id == dd.id) null else dd })
+                        Text("${dd.title} (" + (if (dd.percent > 0) "${Fa.num(dd.percent)}٪" else "") +
+                          (if (dd.fixedAmount > 0) " ${Fa.toman(dd.fixedAmount)}" else "") + ")")
+                      }
+                    }
+                  }
+                  if (dAmount > 0) Text("تخفیف: ${Fa.toman(dAmount)}", color = Green)
+                  Text("مبلغ نهایی: ${Fa.toman(fin)}", color = Gold, fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleLarge)
+                  Text("وضعیت: ✅ تسویه شد", color = Green)
+                }
+              },
+              confirmButton = { TextButton({ vm.endSession(swl.session.id, discount) { onDone() } }) { Text("✅ تسویه و پایان", color = Gold) } },
+              dismissButton = { TextButton(onDismiss) { Text("انصراف") } })
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/BuffetScreen.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.result.PickVisualMediaRequest
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.*
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import coil.compose.AsyncImage
+          import com.cj.gamenet.data.Keys
+          import com.cj.gamenet.data.Product
+          import com.cj.gamenet.ui.*
+          import com.cj.gamenet.util.Fa
+
+          @Composable
+          fun BuffetScreen(vm: AppViewModel) {
+            val products by vm.products.collectAsState()
+            var search by remember { mutableStateOf("") }
+            var category by remember { mutableStateOf<String?>(null) }
+            var editor by remember { mutableStateOf<Product?>(null) }
+            var isNew by remember { mutableStateOf(false) }
+            val cart = remember { mutableStateMapOf<Long, Int>() }
+            val lowStock = vm.s(Keys.LOW_STOCK, "5").toIntOrNull() ?: 5
+            val categories = products.map { it.category }.distinct()
+
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+              RowCenter {
+                Text("بوفه", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold, modifier = Modifier.weight(1f))
+                IconButton({ isNew = true; editor = null }) { Icon(Icons.Filled.Add, null, tint = Gold) }
+              }
+              OutlinedTextField(search, { search = it }, label = { Text("🔍 جستجوی محصول") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+              Spacer(Modifier.height(8.dp))
+              Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(category == null, { category = null }) { Text("همه") }
+                categories.forEach { c -> FilterChip(category == c, { category = if (category == c) null else c }) { Text(c) } }
+              }
+              Spacer(Modifier.height(8.dp))
+              LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+                items(products.filter { (category == null || it.category == category) && it.name.contains(search, true) }) { p ->
+                  val q = cart[p.id] ?: 0
+                  Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    RowCenter(Modifier.padding(10.dp)) {
+                      if (p.imageUri != null) AsyncImage(p.imageUri, null, Modifier.size(48.dp))
+                      Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                        Text(p.name, fontWeight = FontWeight.Bold)
+                        Text(Fa.toman(p.price), color = Gold, style = MaterialTheme.typography.bodySmall)
+                        when {
+                          !p.isActive -> Text("غیرفعال", color = TextDim, style = MaterialTheme.typography.bodySmall)
+                          p.stock == 0 -> Text("⚠️ موجودی تمام شد", color = Red, style = MaterialTheme.typography.bodySmall)
+                          p.stock in 1..lowStock -> Text("⚠️ موجودی کم: ${Fa.num(p.stock)}", color = Yellow, style = MaterialTheme.typography.bodySmall)
+                          p.stock > 0 -> Text("موجودی: ${Fa.num(p.stock)}", color = TextDim, style = MaterialTheme.typography.bodySmall)
+                        }
+                      }
+                      IconButton({ if (q > 0) cart[p.id] = q - 1 }, enabled = q > 0) { Text("➖") }
+                      Text(Fa.num(q), fontWeight = FontWeight.Bold)
+                      IconButton({ cart[p.id] = q + 1 }) { Text("➕") }
+                      IconButton({ editor = p; isNew = false }) { Icon(Icons.Filled.Edit, null, tint = PurpleLight) }
+                    }
+                  }
+                }
+              }
+              if (cart.isNotEmpty()) {
+                val sum = cart.entries.sumOf { (pid, q) -> (products.find { it.id == pid }?.price ?: 0L) * q }
+                Button({ vm.buffetOrder(null, null, cart.toMap()); cart.clear() }, Modifier.fillMaxWidth(),
+                  colors = ButtonDefaults.buttonColors(containerColor = Gold)) {
+                  Text("ثبت فروش مستقیم: ${Fa.toman(sum)}", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+              }
+            }
+            if (isNew || editor != null) ProductEditorDialog(vm, editor) { editor = null; isNew = false }
+          }
+
+          @Composable
+          fun ProductEditorDialog(vm: AppViewModel, initial: Product?, onDismiss: () -> Unit) {
+            var name by remember { mutableStateOf(initial?.name ?: "") }
+            var price by remember { mutableStateOf(if (initial == null) "" else initial.price.toString()) }
+            var cat by remember { mutableStateOf(initial?.category ?: "عمومی") }
+            var stock by remember { mutableStateOf((initial?.stock ?: -1).toString()) }
+            var active by remember { mutableStateOf(initial?.isActive ?: true) }
+            var img by remember { mutableStateOf(initial?.imageUri) }
+            var confirm by remember { mutableStateOf(false) }
+            val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) {
+              img = it?.toString() ?: img
+            }
+            AlertDialog(onDismissRequest = onDismiss,
+              title = { Text(if (initial == null) "افزودن محصول" else "ویرایش محصول") },
+              text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  LabeledText("نام محصول", name) { name = it }
+                  LabeledNum("قیمت (تومان)", price) { price = it }
+                  LabeledText("دسته‌بندی", cat) { cat = it }
+                  LabeledNum("موجودی (-1 = نامحدود)", stock) { stock = it }
+                  RowCenter { Text("فعال", Modifier.weight(1f)); Switch(active, { active = it }) }
+                  RowCenter {
+                    Button({ pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) { Text("🖼 انتخاب تصویر") }
+                    if (img != null) TextButton({ img = null }) { Text("حذف تصویر", color = Red) }
+                  }
+                }
+              },
+              confirmButton = {
+                TextButton({
+                  if (name.isNotBlank()) vm.saveProduct(Product(initial?.id ?: 0, name.trim(),
+                    price.toLongOrNull() ?: 0, cat.trim().ifBlank { "عمومی" }, stock.toIntOrNull() ?: -1, img, active))
+                  onDismiss()
+                }) { Text("ذخیره", color = Gold) }
+              },
+              dismissButton = {
+                Row {
+                  if (initial != null) TextButton({ confirm = true }) { Text("حذف", color = Red) }
+                  TextButton(onDismiss) { Text("انصراف") }
+                }
+              })
+            if (confirm) ConfirmDialog("حذف محصول", "«${initial?.name}» حذف شود؟",
+              onYes = { vm.deleteProduct(initial!!); confirm = false; onDismiss() }, onDismiss = { confirm = false })
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/CustomersScreen.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.*
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import com.cj.gamenet.data.Customer
+          import com.cj.gamenet.data.Keys
+          import com.cj.gamenet.ui.*
+          import com.cj.gamenet.util.Fa
+
+          @Composable
+          fun CustomersScreen(vm: AppViewModel, go: (String) -> Unit) {
+            val customers by vm.customers.collectAsState()
+            var search by remember { mutableStateOf("") }
+            var editor by remember { mutableStateOf<Customer?>(null) }
+            var isNew by remember { mutableStateOf(false) }
+
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+              RowCenter {
+                Text("باشگاه مشتریان", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold, modifier = Modifier.weight(1f))
+                IconButton({ isNew = true }) { Icon(Icons.Filled.Add, null, tint = Gold) }
+              }
+              OutlinedTextField(search, { search = it }, label = { Text("🔍 جستجو (نام / تلفن)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+              Spacer(Modifier.height(8.dp))
+              LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(customers.filter { c -> search.isBlank() || "${c.firstName} ${c.lastName}".contains(search, true) || (c.phone ?: "").contains(search) }) { c ->
+                  Card(onClick = { go("customer/${c.id}") }, colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    RowCenter(Modifier.padding(12.dp)) {
+                      Column(Modifier.weight(1f)) {
+                        Text("${c.firstName} ${c.lastName}", fontWeight = FontWeight.Bold)
+                        Text("🎮 ${Fa.duration(c.totalMinutes)} • ${Fa.num(c.visitCount)} جلسه", style = MaterialTheme.typography.bodySmall, color = TextDim)
+                      }
+                      if (c.availableRewards > 0) Text("🎁 ×${Fa.num(c.availableRewards)}", color = Gold, fontWeight = FontWeight.Bold)
+                      IconButton({ editor = c }) { Icon(Icons.Filled.Edit, null, tint = PurpleLight) }
+                    }
+                  }
+                }
+              }
+            }
+            if (isNew || editor != null) CustomerEditorDialog(vm, editor) { editor = null; isNew = false }
+          }
+
+          @Composable
+          fun CustomerEditorDialog(vm: AppViewModel, initial: Customer?, onDismiss: () -> Unit) {
+            var f by remember { mutableStateOf(initial?.firstName ?: "") }
+            var l by remember { mutableStateOf(initial?.lastName ?: "") }
+            var p by remember { mutableStateOf(initial?.phone ?: "") }
+            var n by remember { mutableStateOf(initial?.notes ?: "") }
+            var confirm by remember { mutableStateOf(false) }
+            AlertDialog(onDismissRequest = onDismiss,
+              title = { Text(if (initial == null) "افزودن مشتری" else "ویرایش مشتری") },
+              text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LabeledText("نام *", f) { f = it }
+                LabeledText("نام خانوادگی", l) { l = it }
+                LabeledText("شماره تلفن (اختیاری)", p) { p = it }
+                LabeledText("توضیحات (اختیاری)", n) { n = it } } },
+              confirmButton = { TextButton({
+                if (f.isNotBlank()) vm.saveCustomer(Customer(initial?.id ?: 0, f.trim(), l.trim(),
+                  p.trim().ifBlank { null }, n.trim().ifBlank { null }, initial?.joinDate ?: System.currentTimeMillis(),
+                  initial?.totalMinutes ?: 0, initial?.visitCount ?: 0, initial?.totalPaid ?: 0,
+                  initial?.rewardProgressMinutes ?: 0, initial?.availableRewards ?: 0))
+                onDismiss()
+              }) { Text("ذخیره", color = Gold) } },
+              dismissButton = {
+                Row {
+                  if (initial != null) TextButton({ confirm = true }) { Text("حذف", color = Red) }
+                  TextButton(onDismiss) { Text("انصراف") }
+                }
+              })
+            if (confirm) ConfirmDialog("حذف مشتری", "«${initial?.firstName} ${initial?.lastName}» حذف شود؟",
+              onYes = { vm.deleteCustomer(initial!!); confirm = false; onDismiss() }, onDismiss = { confirm = false })
+          }
+
+          @Composable
+          fun CustomerProfileScreen(vm: AppViewModel, id: Long, onBack: () -> Unit) {
+            var c by remember { mutableStateOf<Customer?>(null) }
+            var history by remember { mutableStateOf<List<com.cj.gamenet.data.Session>>(emptyList()) }
+            var reload by remember { mutableIntStateOf(0) }
+            val thresholdMin = (vm.s(Keys.REWARD_HOURS, "4").toLongOrNull() ?: 4) * 60
+            val rewardTitle = vm.s(Keys.REWARD_TITLE, "جایزه ۴ ساعته")
+
+            LaunchedEffect(reload) { c = vm.customerOf(id); history = vm.sessionsOf(id) }
+            val cust = c ?: return
+
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+              RowCenter {
+                IconButton(onBack) { Icon(Icons.Filled.ArrowBack, null) }
+                Text("${cust.firstName} ${cust.lastName}", style = MaterialTheme.typography.headlineSmall,
+                  fontWeight = FontWeight.Bold, color = Gold, modifier = Modifier.weight(1f))
+              }
+              Text("عضویت: ${Fa.date(cust.joinDate)}" + (cust.phone?.let { " • 📞 ${Fa.digits(it)}" } ?: ""),
+                color = TextDim, style = MaterialTheme.typography.bodySmall)
+              Spacer(Modifier.height(12.dp))
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("مجموع بازی", Fa.duration(cust.totalMinutes), modifier = Modifier.weight(1f))
+                StatCard("جلسات", Fa.num(cust.visitCount), modifier = Modifier.weight(1f))
+              }
+              Spacer(Modifier.height(8.dp))
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("مجموع پرداختی", Fa.toman(cust.totalPaid), gold = true, modifier = Modifier.weight(1f))
+                StatCard("آخرین مراجعه", history.firstOrNull()?.endTime?.let { Fa.date(it) } ?: "—", modifier = Modifier.weight(1f))
+              }
+              Spacer(Modifier.height(16.dp))
+              val ready = cust.availableRewards > 0
+              Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = if (ready) GoldDark else CardBg)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                  Text(if (ready) "🎁 جایزه آماده است!" else "🏆 $rewardTitle",
+                    color = if (ready) Gold else TextMain, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                  if (ready) {
+                    Text("تعداد جایزه آماده: ${Fa.num(cust.availableRewards)}", color = Gold)
+                    Spacer(Modifier.height(8.dp))
+                    Button({ vm.consumeReward(cust.id); reload++ }, colors = ButtonDefaults.buttonColors(containerColor = Gold)) {
+                      Text("💎 مصرف جایزه / صفر کردن", color = androidx.compose.ui.graphics.Color.Black)
+                    }
+                  } else {
+                    Spacer(Modifier.height(8.dp))
+                    val progress = (cust.rewardProgressMinutes.toFloat() / thresholdMin).coerceIn(0f, 1f)
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(4.dp))
+                    Text("${Fa.timer(cust.rewardProgressMinutes * 60000)} / ${Fa.digits("${thresholdMin / 60}:00")}",
+                      color = TextDim, style = MaterialTheme.typography.bodySmall)
+                  }
+                }
+              }
+              Spacer(Modifier.height(16.dp))
+              SectionTitle("تاریخچه بازی‌ها")
+              if (history.isEmpty()) Text("هنوز جلسه‌ای ثبت نشده.", color = TextDim)
+              history.forEach { s ->
+                Card(Modifier.padding(vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                  Column(Modifier.padding(10.dp)) {
+                    Text("${Fa.date(s.endTime ?: 0)} — ${s.deviceName}", fontWeight = FontWeight.Bold)
+                    Text("مدت: ${Fa.duration(s.totalDurationMinutes)} • بازی: ${Fa.toman(s.gameCost)} • بوفه: ${Fa.toman(s.buffetCost)}",
+                      style = MaterialTheme.typography.bodySmall, color = TextDim)
+                    Text("نهایی: ${Fa.toman(s.finalAmount)}", color = Gold, fontWeight = FontWeight.Bold)
+                  }
+                }
+              }
+            }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/ReportsScreen.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.*
+          import androidx.compose.material.icons.filled.ArrowBack
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import com.cj.gamenet.logic.Report
+          import com.cj.gamenet.ui.*
+          import com.cj.gamenet.util.Fa
+
+          @Composable
+          fun ReportsScreen(vm: AppViewModel, go: (String) -> Unit) {
+            var range by remember { mutableStateOf("today") }
+            var report by remember { mutableStateOf<Report?>(null) }
+            val now = System.currentTimeMillis()
+            val (from, to) = when (range) {
+              "week" -> Fa.startOfWeek() to now
+              "month" -> Fa.startOfMonth() to now
+              "all" -> 0L to now
+              else -> Fa.startOfToday() to now
+            }
+            LaunchedEffect(range) { report = vm.report(from, to) }
+            val r = report
+
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+              RowCenter {
+                Text("گزارش‌ها", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold, modifier = Modifier.weight(1f))
+                TextButton({ go("transactions") }) { Text("📜 تراکنش‌ها", color = PurpleLight) }
+              }
+              Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(range == "today", { range = "today" }) { Text("امروز") }
+                FilterChip(range == "week", { range = "week" }) { Text("این هفته") }
+                FilterChip(range == "month", { range = "month" }) { Text("این ماه") }
+                FilterChip(range == "all", { range = "all" }) { Text("همه") }
+              }
+              Spacer(Modifier.height(12.dp))
+              if (r == null) { Text("در حال بارگذاری...", color = TextDim); return@Column }
+              StatCard("💰 فروش کل بازه", Fa.toman(r.totalSales), gold = true, modifier = Modifier.fillMaxWidth())
+              Spacer(Modifier.height(8.dp))
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("فروش بازی", Fa.toman(r.gameSales), modifier = Modifier.weight(1f))
+                StatCard("فروش بوفه", Fa.toman(r.buffetSales), modifier = Modifier.weight(1f))
+              }
+              Spacer(Modifier.height(8.dp))
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("جلسات", Fa.num(r.sessionCount), modifier = Modifier.weight(1f))
+                StatCard("ساعات بازی", Fa.duration(r.totalMinutes), modifier = Modifier.weight(1f))
+              }
+              Spacer(Modifier.height(12.dp))
+              SectionTitle("🔥 محصولات پرفروش")
+              if (r.topProducts.isEmpty()) Text("داده‌ای نیست", color = TextDim)
+              r.topProducts.forEach { Text("• ${it.name} — ${Fa.num(it.c)} عدد (${Fa.toman(it.s)})", color = TextMain) }
+              SectionTitle("🎮 دستگاه‌های پرتردد")
+              if (r.topDevices.isEmpty()) Text("داده‌ای نیست", color = TextDim)
+              r.topDevices.forEach { Text("• ${it.name} — ${Fa.num(it.c)} جلسه (${Fa.toman(it.s)})", color = TextMain) }
+            }
+          }
+
+          @Composable
+          fun TransactionsScreen(vm: AppViewModel, onBack: () -> Unit) {
+            val list by vm.paidSessions.collectAsState()
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+              RowCenter {
+                IconButton(onBack) { Icon(Icons.Filled.ArrowBack, null) }
+                Text("تاریخچه تراکنش‌ها", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold)
+              }
+              LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(list) { s ->
+                  Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    Column(Modifier.padding(12.dp)) {
+                      Text("${Fa.date(s.endTime ?: 0)} ${Fa.time(s.endTime ?: 0)} — ${s.deviceName}", fontWeight = FontWeight.Bold)
+                      Text("شروع: ${Fa.time(s.startTime)} • پایان: ${s.endTime?.let { Fa.time(it) } ?: "-"}", style = MaterialTheme.typography.bodySmall, color = TextDim)
+                      Text("مشتری: ${s.customerName ?: "بدون مشتری"} • مدت: ${Fa.duration(s.totalDurationMinutes)}", style = MaterialTheme.typography.bodySmall, color = TextDim)
+                      Text("بازی: ${Fa.toman(s.gameCost)} • بوفه: ${Fa.toman(s.buffetCost)}", style = MaterialTheme.typography.bodySmall, color = TextDim)
+                      RowCenter {
+                        Text("نهایی: ${Fa.toman(s.finalAmount)}", color = Gold, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text("✅ تسویه شد", color = Green, style = MaterialTheme.typography.bodySmall)
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/ReservationsScreen.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.*
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import com.cj.gamenet.ui.*
+          import com.cj.gamenet.util.Fa
+          import java.util.Calendar
+
+          @Composable
+          fun ReservationsScreen(vm: AppViewModel, onBack: () -> Unit) {
+            val list by vm.reservations.collectAsState()
+            val devices by vm.devices.collectAsState()
+            var add by remember { mutableStateOf(false) }
+
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+              RowCenter {
+                IconButton(onBack) { Icon(Icons.Filled.ArrowBack, null) }
+                Text("📅 رزرو دستگاه", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold, modifier = Modifier.weight(1f))
+                IconButton({ add = true }) { Icon(Icons.Filled.Add, null, tint = Gold) }
+              }
+              LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(list) { r ->
+                  val device = devices.find { it.id == r.deviceId }
+                  Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    RowCenter(Modifier.padding(12.dp)) {
+                      Column(Modifier.weight(1f)) {
+                        Text("🟡 ${device?.name ?: "?"} — ${r.customerName}", fontWeight = FontWeight.Bold)
+                        Text("${Fa.date(r.startTime)} ساعت ${Fa.time(r.startTime)} • مدت ${Fa.duration(r.durationMinutes.toLong())}",
+                          style = MaterialTheme.typography.bodySmall, color = TextDim)
+                      }
+                      IconButton({ vm.deleteReservation(r) }) { Icon(Icons.Filled.Delete, null, tint = Red) }
+                    }
+                  }
+                }
+              }
+            }
+            if (add) AddReservationDialog(vm, devices.map { it.id to it.name }) { add = false }
+          }
+
+          @Composable
+          fun AddReservationDialog(vm: AppViewModel, devices: List<Pair<Long, String>>, onDismiss: () -> Unit) {
+            var deviceId by remember { mutableStateOf(devices.firstOrNull()?.first ?: 0L) }
+            var name by remember { mutableStateOf("") }
+            var duration by remember { mutableStateOf("60") }
+            var dateState by remember { mutableStateOf<Long?>(null) }
+            var hour by remember { mutableIntStateOf(18) }
+            var minute by remember { mutableIntStateOf(0) }
+            var showDate by remember { mutableStateOf(false) }
+            var showTime by remember { mutableStateOf(false) }
+
+            if (showDate) {
+              val st = rememberDatePickerState()
+              DatePickerDialog(onDismissRequest = { showDate = false },
+                confirmButton = { TextButton({ dateState = st.selectedDateMillis; showDate = false }) { Text("تایید", color = Gold) } }
+              ) { DatePicker(state = st) }
+            }
+            if (showTime) {
+              val st = rememberTimePickerState(initialHour = hour, initialMinute = minute, is24Hour = true)
+              AlertDialog(onDismissRequest = { showTime = false },
+                confirmButton = { TextButton({ hour = st.hour; minute = st.minute; showTime = false }) { Text("تایید", color = Gold) } },
+                dismissButton = { TextButton({ showTime = false }) { Text("انصراف") } }
+              ) { TimePicker(state = st) }
+            }
+
+            AlertDialog(onDismissRequest = onDismiss, title = { Text("رزرو جدید") },
+              text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  if (devices.isEmpty()) Text("ابتدا دستگاه اضافه کنید.", color = Red)
+                  Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    devices.forEach { (id, nm) -> FilterChip(deviceId == id, { deviceId = id }) { Text(nm) } }
+                  }
+                  LabeledText("نام مشتری", name) { name = it }
+                  TextButton({ showDate = true }) { Text("📆 تاریخ: ${dateState?.let { Fa.date(it) } ?: "انتخاب کنید"}", color = PurpleLight) }
+                  TextButton({ showTime = true }) { Text("⏰ ساعت: ${Fa.digits("%02d:%02d".format(hour, minute))}", color = PurpleLight) }
+                  LabeledNum("مدت (دقیقه)", duration) { duration = it }
+                }
+              },
+              confirmButton = {
+                TextButton({
+                  val base = Calendar.getInstance().apply {
+                    timeInMillis = dateState ?: System.currentTimeMillis()
+                    set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
+                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                  }
+                  if (name.isNotBlank() && devices.isNotEmpty()) vm.addReservation(com.cj.gamenet.data.Reservation(
+                    deviceId = deviceId, customerName = name.trim(),
+                    startTime = base.timeInMillis, durationMinutes = duration.toIntOrNull() ?: 60))
+                  onDismiss()
+                }) { Text("ذخیره", color = Gold) }
+              },
+              dismissButton = { TextButton(onDismiss) { Text("انصراف") } })
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/ui/screens/SettingsScreen.kt << 'KTEOF'
+          @file:OptIn(ExperimentalMaterial3Api::class)
+          package com.cj.gamenet.ui.screens
+
+          import android.net.Uri
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import com.cj.gamenet.data.*
+          import com.cj.gamenet.ui.*
+          import com.cj.gamenet.util.Fa
+
+          @Composable
+          fun SettingsScreen(vm: AppViewModel) {
+            var unlocked by remember { mutableStateOf(!vm.pinEnabled()) }
+            if (!unlocked) { PinGateDialog(vm) { unlocked = true }; return }
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+              Text("⚙️ تنظیمات مدیریت", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Gold)
+              Spacer(Modifier.height(12.dp))
+              NetInfoSection(vm); RewardSection(vm); PinSection(vm)
+              ServicesSection(vm); DiscountsSection(vm); BackupSection(vm)
+              Spacer(Modifier.height(24.dp))
+              Text("Game Net CJ — نسخه ۱.۰", color = TextDim, style = MaterialTheme.typography.bodySmall)
+            }
+          }
+
+          @Composable
+          private fun PinGateDialog(vm: AppViewModel, onOk: () -> Unit) {
+            var pin by remember { mutableStateOf("") }
+            var error by remember { mutableStateOf(false) }
+            AlertDialog(onDismissRequest = {}, title = { Text("🔒 قفل مدیریتی") },
+              text = { Column {
+                LabeledNum("رمز مدیریتی را وارد کنید", pin) { pin = it; error = false }
+                if (error) Text("رمز اشتباه است", color = Red) } },
+              confirmButton = { TextButton({ vm.checkPin(pin) { ok -> if (ok) onOk() else error = true } }) { Text("ورود", color = Gold) } })
+          }
+
+          @Composable
+          private fun NetInfoSection(vm: AppViewModel) {
+            val settings by vm.settings.collectAsState()
+            var name by remember(settings) { mutableStateOf(vm.s(Keys.NET_NAME, "")) }
+            var en by remember(settings) { mutableStateOf(vm.s(Keys.NET_NAME_EN, "")) }
+            var phone by remember(settings) { mutableStateOf(vm.s(Keys.PHONE, "")) }
+            var addr by remember(settings) { mutableStateOf(vm.s(Keys.ADDRESS, "")) }
+            Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+              Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("🏢 اطلاعات گیم‌نت")
+                LabeledText("نام گیم‌نت", name) { name = it }
+                LabeledText("نام انگلیسی", en) { en = it }
+                LabeledText("شماره تماس", phone) { phone = it }
+                LabeledText("آدرس", addr) { addr = it }
+                Button({ listOf(Keys.NET_NAME to name, Keys.NET_NAME_EN to en, Keys.PHONE to phone, Keys.ADDRESS to addr)
+                  .forEach { (k, v) -> vm.setSetting(k, v) } }) { Text("ذخیره اطلاعات") }
+              }
+            }
+          }
+
+          @Composable
+          private fun RewardSection(vm: AppViewModel) {
+            val settings by vm.settings.collectAsState()
+            var enabled by remember(settings) { mutableStateOf(vm.s(Keys.REWARD_ENABLED, "true").toBoolean()) }
+            var hours by remember(settings) { mutableStateOf(vm.s(Keys.REWARD_HOURS, "4")) }
+            var title by remember(settings) { mutableStateOf(vm.s(Keys.REWARD_TITLE, "")) }
+            var low by remember(settings) { mutableStateOf(vm.s(Keys.LOW_STOCK, "5")) }
+            Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+              Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("🏆 سیستم جایزه")
+                RowCenter { Text("فعال", Modifier.weight(1f)); Switch(enabled, { enabled = it }) }
+                LabeledNum("ساعت موردنیاز برای جایزه", hours) { hours = it }
+                LabeledText("عنوان جایزه", title) { title = it }
+                LabeledNum("آستانه هشدار موجودی بوفه", low) { low = it }
+                Button({ vm.setSetting(Keys.REWARD_ENABLED, enabled.toString())
+                  vm.setSetting(Keys.REWARD_HOURS, hours)
+                  vm.setSetting(Keys.REWARD_TITLE, title)
+                  vm.setSetting(Keys.LOW_STOCK, low) }) { Text("ذخیره تنظیمات جایزه") }
+              }
+            }
+          }
+
+          @Composable
+          private fun PinSection(vm: AppViewModel) {
+            var p1 by remember { mutableStateOf("") }
+            Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+              Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("🔒 قفل مدیریتی (PIN)")
+                if (vm.pinEnabled()) {
+                  Text("قفل فعال است.", color = Green)
+                  Button({ vm.removePin() }) { Text("حذف رمز") }
+                } else {
+                  LabeledNum("رمز جدید (حداقل ۴ رقم)", p1) { p1 = it }
+                  Button({ if (p1.length >= 4) vm.setPin(p1) }) { Text("فعال‌سازی قفل") }
+                }
+              }
+            }
+          }
+
+          @Composable
+          private fun ServicesSection(vm: AppViewModel) {
+            val services by vm.services.collectAsState()
+            val devices by vm.devices.collectAsState()
+            var editor by remember { mutableStateOf<Service?>(null) }
+            var isNew by remember { mutableStateOf(false) }
+            Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+              Column(Modifier.padding(14.dp)) {
+                SectionTitle("💵 مدیریت سرویس‌ها و قیمت‌ها")
+                devices.forEach { d ->
+                  val list = services.filter { it.deviceId == d.id }
+                  if (list.isNotEmpty()) Text(d.name, color = PurpleLight, fontWeight = FontWeight.Bold)
+                  list.forEach { s ->
+                    RowCenter(Modifier.padding(vertical = 4.dp)) {
+                      Text("${s.name} — ${Fa.toman(s.hourlyPrice)}/ساعت" + if (!s.isActive) " (غیرفعال)" else "", modifier = Modifier.weight(1f))
+                      IconButton({ editor = s }) { Icon(Icons.Filled.Edit, null, tint = PurpleLight) }
+                      IconButton({ vm.deleteService(s) }) { Icon(Icons.Filled.Delete, null, tint = Red) }
+                    }
+                  }
+                }
+                services.filter { it.deviceId == null }.forEach { s ->
+                  RowCenter { Text("★ ${s.name} — ${Fa.toman(s.hourlyPrice)}/ساعت", modifier = Modifier.weight(1f))
+                    IconButton({ editor = s }) { Icon(Icons.Filled.Edit, null, tint = PurpleLight) }
+                    IconButton({ vm.deleteService(s) }) { Icon(Icons.Filled.Delete, null, tint = Red) }
+                  }
+                }
+                Button({ isNew = true; editor = null }) { Text("➕ سرویس / قیمت جدید") }
+              }
+            }
+            if (isNew || editor != null) ServiceEditorDialog(vm, devices, editor) { editor = null; isNew = false }
+          }
+
+          @Composable
+          fun ServiceEditorDialog(vm: AppViewModel, devices: List<Device>, initial: Service?, onDismiss: () -> Unit) {
+            var deviceId by remember { mutableStateOf(initial?.deviceId ?: devices.firstOrNull()?.id) }
+            var name by remember { mutableStateOf(initial?.name ?: "") }
+            var cc by remember { mutableStateOf((initial?.controllerCount ?: 1).toString()) }
+            var price by remember { mutableStateOf(if (initial == null) "" else initial.hourlyPrice.toString()) }
+            var active by remember { mutableStateOf(initial?.isActive ?: true) }
+            AlertDialog(onDismissRequest = onDismiss,
+              title = { Text(if (initial == null) "سرویس جدید" else "ویرایش سرویس") },
+              text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    devices.forEach { d -> FilterChip(deviceId == d.id, { deviceId = d.id }) { Text(d.name) } }
+                  }
+                  FilterChip(deviceId == null, { deviceId = null }) { Text("ویژه / عمومی") }
+                  LabeledText("نام سرویس (مثلاً: ۲ دسته)", name) { name = it }
+                  LabeledNum("تعداد دسته", cc) { cc = it }
+                  LabeledNum("قیمت هر ساعت (تومان)", price) { price = it }
+                  RowCenter { Text("فعال", Modifier.weight(1f)); Switch(active, { active = it }) }
+                }
+              },
+              confirmButton = {
+                TextButton({
+                  if (name.isNotBlank()) vm.saveService(Service(initial?.id ?: 0, deviceId, name.trim(),
+                    cc.toIntOrNull() ?: 1, price.toLongOrNull() ?: 0, active))
+                  onDismiss()
+                }) { Text("ذخیره", color = Gold) }
+              },
+              dismissButton = { TextButton(onDismiss) { Text("انصراف") } })
+          }
+
+          @Composable
+          private fun DiscountsSection(vm: AppViewModel) {
+            val discounts by vm.discounts.collectAsState()
+            var add by remember { mutableStateOf(false) }
+            Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+              Column(Modifier.padding(14.dp)) {
+                SectionTitle("🏷 تخفیف‌ها")
+                discounts.forEach { d ->
+                  RowCenter {
+                    Text("${d.title} (" + (if (d.percent > 0) "${Fa.num(d.percent)}٪ " else "") +
+                      (if (d.fixedAmount > 0) Fa.toman(d.fixedAmount) else "") + ")" +
+                      if (d.isActive) "" else " (غیرفعال)", modifier = Modifier.weight(1f))
+                    IconButton({ vm.deleteDiscount(d) }) { Icon(Icons.Filled.Delete, null, tint = Red) }
+                  }
+                }
+                Button({ add = true }) { Text("➕ تخفیف جدید") }
+              }
+            }
+            if (add) DiscountEditorDialog(vm) { add = false }
+          }
+
+          @Composable
+          fun DiscountEditorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+            var title by remember { mutableStateOf("") }
+            var percent by remember { mutableStateOf("0") }
+            var fixed by remember { mutableStateOf("0") }
+            AlertDialog(onDismissRequest = onDismiss, title = { Text("تخفیف جدید") },
+              text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LabeledText("عنوان", title) { title = it }
+                LabeledNum("درصد تخفیف", percent) { percent = it }
+                LabeledNum("مبلغ ثابت تخفیف", fixed) { fixed = it } } },
+              confirmButton = {
+                TextButton({
+                  if (title.isNotBlank()) vm.saveDiscount(Discount(title = title.trim(),
+                    percent = percent.toIntOrNull() ?: 0, fixedAmount = fixed.toLongOrNull() ?: 0))
+                  onDismiss()
+                }) { Text("ذخیره", color = Gold) }
+              },
+              dismissButton = { TextButton(onDismiss) { Text("انصراف") } })
+          }
+
+          @Composable
+          private fun BackupSection(vm: AppViewModel) {
+            val ctx = LocalContext.current
+            var msg by remember { mutableStateOf("") }
+            var pendingRestore by remember { mutableStateOf<Uri?>(null) }
+            val backupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+              uri?.let { vm.backup(ctx, it) { m -> msg = m } } }
+            val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+              pendingRestore = uri }
+            Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+              Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("💾 پشتیبان‌گیری و بازیابی")
+                Button({ backupLauncher.launch("gamenet-cj-backup.json") }, Modifier.fillMaxWidth()) { Text("⬆️ تهیه نسخه پشتیبان (Backup)") }
+                Button({ restoreLauncher.launch(arrayOf("application/json", "text/plain")) }, Modifier.fillMaxWidth(),
+                  colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("⬇️ بازیابی (Restore)") }
+                if (msg.isNotBlank()) Text(msg, color = Gold)
+              }
+            }
+            pendingRestore?.let { uri ->
+              ConfirmDialog("بازیابی اطلاعات", "تمام اطلاعات فعلی با فایل پشتیبان جایگزین می‌شود. مطمئنید؟",
+                yes = "بله، بازیابی کن",
+                onYes = { vm.restore(ctx, uri) { m -> msg = m }; pendingRestore = null },
+                onDismiss = { pendingRestore = null })
+            }
+          }
+          KTEOF
+
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GameNetCJ-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
