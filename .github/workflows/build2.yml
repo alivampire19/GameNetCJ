@@ -1,0 +1,422 @@
+name: Build APK v2
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Generate project files
+        run: |
+          set -e
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/java/com/cj/gamenet/data
+          mkdir -p app/src/main/java/com/cj/gamenet/logic
+          mkdir -p app/src/main/java/com/cj/gamenet/util
+          mkdir -p app/src/main/java/com/cj/gamenet/ui/screens
+
+          cat > settings.gradle.kts << 'KTEOF'
+          pluginManagement {
+            repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "GameNetCJ"
+          include(":app")
+          KTEOF
+
+          cat > build.gradle.kts << 'KTEOF'
+          plugins {
+            id("com.android.application") version "8.5.2" apply false
+            id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+            id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+            id("com.google.devtools.ksp") version "2.0.21-1.0.27" apply false
+          }
+          KTEOF
+
+          cat > gradle.properties << 'KTEOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          KTEOF
+
+          cat > app/build.gradle.kts << 'KTEOF'
+          plugins {
+            id("com.android.application")
+            id("org.jetbrains.kotlin.android")
+            id("org.jetbrains.kotlin.plugin.compose")
+            id("com.google.devtools.ksp")
+          }
+          android {
+            namespace = "com.cj.gamenet"
+            compileSdk = 34
+            defaultConfig {
+              applicationId = "com.cj.gamenet"
+              minSdk = 24
+              targetSdk = 34
+              versionCode = 1
+              versionName = "1.0.0"
+            }
+            buildTypes {
+              release {
+                isMinifyEnabled = false
+                signingConfig = signingConfigs.getByName("debug")
+              }
+            }
+            compileOptions {
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+            }
+            kotlinOptions { jvmTarget = "17" }
+            buildFeatures { compose = true }
+            lint { checkReleaseBuilds = false }
+          }
+          dependencies {
+            implementation(platform("androidx.compose:compose-bom:2024.09.03"))
+            implementation("androidx.core:core-ktx:1.13.1")
+            implementation("androidx.activity:activity-compose:1.9.2")
+            implementation("androidx.compose.ui:ui")
+            implementation("androidx.compose.material3:material3")
+            implementation("androidx.compose.material:material-icons-extended")
+            implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
+            implementation("androidx.navigation:navigation-compose:2.8.2")
+            implementation("androidx.room:room-runtime:2.6.1")
+            implementation("androidx.room:room-ktx:2.6.1")
+            ksp("androidx.room:room-compiler:2.6.1")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+            implementation("io.coil-kt:coil-compose:2.7.0")
+          }
+          KTEOF
+
+          cat > app/src/main/AndroidManifest.xml << 'KTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:name=".GameNetApp"
+                  android:allowBackup="true"
+                  android:icon="@android:drawable/sym_def_app_icon"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          KTEOF
+
+          cat > app/src/main/res/values/strings.xml << 'KTEOF'
+          <resources>
+              <string name="app_name">گیم نت سی جی</string>
+          </resources>
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/GameNetApp.kt << 'KTEOF'
+          package com.cj.gamenet
+
+          import android.app.Application
+          import com.cj.gamenet.data.AppDatabase
+          import com.cj.gamenet.logic.GameRepo
+
+          class GameNetApp : Application() {
+            val db by lazy { AppDatabase.build(this) }
+            val repo by lazy { GameRepo(db) }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/MainActivity.kt << 'KTEOF'
+          package com.cj.gamenet
+
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.activity.viewModels
+          import androidx.compose.runtime.CompositionLocalProvider
+          import androidx.compose.ui.platform.LocalLayoutDirection
+          import androidx.compose.ui.unit.LayoutDirection
+          import com.cj.gamenet.ui.AppViewModel
+          import com.cj.gamenet.ui.CJTheme
+          import com.cj.gamenet.ui.screens.AppRoot
+
+          class MainActivity : ComponentActivity() {
+            private val vm: AppViewModel by viewModels { AppViewModel.factory(application) }
+            override fun onCreate(savedInstanceState: Bundle?) {
+              super.onCreate(savedInstanceState)
+              setContent {
+                CJTheme {
+                  CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                    AppRoot(vm)
+                  }
+                }
+              }
+            }
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/data/Model.kt << 'KTEOF'
+          package com.cj.gamenet.data
+
+          import androidx.room.*
+
+          @Entity(tableName = "devices")
+          data class Device(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val name: String, val type: String, val number: Int,
+            val controllerCount: Int = 4, val isActive: Boolean = true,
+            val status: String = "FREE"
+          )
+
+          @Entity(tableName = "services")
+          data class Service(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val deviceId: Long?, val name: String,
+            val controllerCount: Int = 1, val hourlyPrice: Long,
+            val isActive: Boolean = true
+          )
+
+          @Entity(tableName = "sessions")
+          data class Session(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val deviceId: Long, val deviceName: String,
+            val customerId: Long? = null, val customerName: String? = null,
+            val startTime: Long, val endTime: Long? = null,
+            val initialCredit: Long = 0, val gameCost: Long = 0,
+            val buffetCost: Long = 0, val totalDurationMinutes: Long = 0,
+            val finalAmount: Long = 0, val isPaid: Boolean = false
+          )
+
+          @Entity(tableName = "session_service_logs")
+          data class SessionServiceLog(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val sessionId: Long, val serviceId: Long?, val serviceName: String,
+            val controllerCount: Int, val hourlyPrice: Long,
+            val startTime: Long, val endTime: Long? = null
+          )
+
+          data class SessionWithLogs(
+            @Embedded val session: Session,
+            @Relation(parentColumn = "id", entityColumn = "sessionId")
+            val logs: List<SessionServiceLog>
+          )
+
+          @Entity(tableName = "products")
+          data class Product(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val name: String, val price: Long, val category: String = "عمومی",
+            val stock: Int = -1, val imageUri: String? = null, val isActive: Boolean = true
+          )
+
+          @Entity(tableName = "buffet_orders")
+          data class BuffetOrder(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val sessionId: Long?, val customerId: Long? = null,
+            val totalAmount: Long, val timestamp: Long, val isPaid: Boolean = false
+          )
+
+          @Entity(tableName = "buffet_order_items")
+          data class BuffetOrderItem(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val orderId: Long, val productId: Long?, val productName: String,
+            val unitPrice: Long, val quantity: Int
+          )
+
+          @Entity(tableName = "customers")
+          data class Customer(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val firstName: String, val lastName: String = "",
+            val phone: String? = null, val notes: String? = null,
+            val joinDate: Long = System.currentTimeMillis(),
+            val totalMinutes: Long = 0, val visitCount: Int = 0,
+            val totalPaid: Long = 0, val rewardProgressMinutes: Long = 0,
+            val availableRewards: Int = 0
+          )
+
+          @Entity(tableName = "reservations")
+          data class Reservation(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val deviceId: Long, val customerName: String,
+            val startTime: Long, val durationMinutes: Int, val note: String? = null
+          )
+
+          @Entity(tableName = "discounts")
+          data class Discount(
+            @PrimaryKey(autoGenerate = true) val id: Long = 0,
+            val title: String, val percent: Int = 0, val fixedAmount: Long = 0,
+            val startDate: Long? = null, val endDate: Long? = null,
+            val isActive: Boolean = true
+          )
+
+          @Entity(tableName = "settings")
+          data class SettingEntry(@PrimaryKey val key: String, val value: String)
+
+          data class NameCount(val name: String, val c: Int, val s: Long)
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/data/Keys.kt << 'KTEOF'
+          package com.cj.gamenet.data
+
+          object Keys {
+            const val NET_NAME = "net_name"; const val NET_NAME_EN = "net_name_en"
+            const val PHONE = "phone"; const val ADDRESS = "address"
+            const val CURRENCY = "currency"
+            const val REWARD_ENABLED = "reward_enabled"; const val REWARD_HOURS = "reward_hours"
+            const val REWARD_TITLE = "reward_title"; const val LOW_STOCK = "low_stock"
+            const val PIN_HASH = "admin_pin_hash"
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/data/GameDao.kt << 'KTEOF'
+          package com.cj.gamenet.data
+
+          import androidx.room.*
+          import kotlinx.coroutines.flow.Flow
+
+          @Dao
+          interface GameDao {
+            @Query("SELECT * FROM devices ORDER BY number") fun devices(): Flow<List<Device>>
+            @Query("SELECT * FROM devices") suspend fun allDevices(): List<Device>
+            @Insert suspend fun insertDevice(d: Device): Long
+            @Update suspend fun updateDevice(d: Device)
+            @Delete suspend fun deleteDevice(d: Device)
+            @Query("UPDATE devices SET status = :s WHERE id = :id") suspend fun setDeviceStatus(id: Long, s: String)
+
+            @Query("SELECT * FROM services ORDER BY deviceId, controllerCount") fun services(): Flow<List<Service>>
+            @Query("SELECT * FROM services") suspend fun allServices(): List<Service>
+            @Query("SELECT * FROM services WHERE isActive = 1 AND (deviceId = :deviceId OR deviceId IS NULL)")
+            suspend fun servicesFor(deviceId: Long): List<Service>
+            @Insert suspend fun insertService(s: Service): Long
+            @Update suspend fun updateService(s: Service)
+            @Delete suspend fun deleteService(s: Service)
+            @Query("DELETE FROM services WHERE deviceId = :deviceId") suspend fun deleteServicesOf(deviceId: Long)
+
+            @Insert suspend fun insertSession(s: Session): Long
+            @Query("SELECT * FROM sessions WHERE id = :id") suspend fun session(id: Long): Session?
+            @Query("SELECT * FROM sessions") suspend fun allSessions(): List<Session>
+            @Transaction @Query("SELECT * FROM sessions WHERE endTime IS NULL") fun activeWithLogs(): Flow<List<SessionWithLogs>>
+            @Transaction @Query("SELECT * FROM sessions WHERE id = :id") fun sessionWithLogsFlow(id: Long): Flow<SessionWithLogs?>
+            @Query("SELECT * FROM sessions WHERE isPaid = 1 ORDER BY endTime DESC LIMIT 300") fun paidSessions(): Flow<List<Session>>
+            @Query("SELECT * FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to ORDER BY endTime DESC")
+            suspend fun sessionsBetween(from: Long, to: Long): List<Session>
+            @Query("SELECT * FROM sessions WHERE customerId = :cid AND isPaid = 1 ORDER BY endTime DESC")
+            suspend fun sessionsOfCustomer(cid: Long): List<Session>
+            @Query("""UPDATE sessions SET endTime = :end, gameCost = :game, buffetCost = :buffet,
+                totalDurationMinutes = :dur, finalAmount = :fin WHERE id = :id""")
+            suspend fun finalizeSession(id: Long, end: Long, game: Long, buffet: Long, dur: Long, fin: Long)
+
+            @Insert suspend fun insertLog(l: SessionServiceLog): Long
+            @Query("SELECT * FROM session_service_logs WHERE sessionId = :sid ORDER BY startTime") suspend fun logsOf(sid: Long): List<SessionServiceLog>
+            @Query("SELECT * FROM session_service_logs") suspend fun logsOfAll(): List<SessionServiceLog>
+            @Query("UPDATE session_service_logs SET endTime = :end WHERE sessionId = :sid AND endTime IS NULL")
+            suspend fun closeOpenLog(sid: Long, end: Long)
+
+            @Query("SELECT * FROM products ORDER BY name") fun products(): Flow<List<Product>>
+            @Query("SELECT * FROM products") suspend fun allProducts(): List<Product>
+            @Query("SELECT * FROM products WHERE id = :id") suspend fun product(id: Long): Product?
+            @Insert suspend fun insertProduct(p: Product): Long
+            @Update suspend fun updateProduct(p: Product)
+            @Delete suspend fun deleteProduct(p: Product)
+            @Query("UPDATE products SET stock = :s WHERE id = :id") suspend fun updateStock(id: Long, s: Int)
+
+            @Insert suspend fun insertOrder(o: BuffetOrder): Long
+            @Insert suspend fun insertOrderItem(i: BuffetOrderItem)
+            @Query("SELECT * FROM buffet_orders") suspend fun allOrders(): List<BuffetOrder>
+            @Query("SELECT * FROM buffet_order_items") suspend fun allOrderItems(): List<BuffetOrderItem>
+            @Query("SELECT SUM(totalAmount) FROM buffet_orders WHERE sessionId = :sid") suspend fun buffetCostOf(sid: Long): Long?
+            @Query("SELECT SUM(totalAmount) FROM buffet_orders WHERE timestamp BETWEEN :from AND :to") suspend fun buffetSalesBetween(from: Long, to: Long): Long?
+            @Query("SELECT COUNT(*) FROM buffet_orders WHERE timestamp BETWEEN :from AND :to") suspend fun buffetOrderCount(from: Long, to: Long): Int
+
+            @Query("SELECT * FROM customers ORDER BY firstName") fun customers(): Flow<List<Customer>>
+            @Query("SELECT * FROM customers") suspend fun allCustomers(): List<Customer>
+            @Query("SELECT * FROM customers WHERE id = :id") suspend fun customer(id: Long): Customer?
+            @Insert suspend fun insertCustomer(c: Customer): Long
+            @Update suspend fun updateCustomer(c: Customer)
+            @Delete suspend fun deleteCustomer(c: Customer)
+            @Query("""UPDATE customers SET totalMinutes = :m, visitCount = :v, totalPaid = :p,
+                rewardProgressMinutes = :r, availableRewards = :w WHERE id = :id""")
+            suspend fun updateCustomerStats(id: Long, m: Long, v: Int, p: Long, r: Long, w: Int)
+            @Query("UPDATE customers SET availableRewards = :w WHERE id = :id") suspend fun setRewards(id: Long, w: Int)
+
+            @Query("SELECT * FROM reservations ORDER BY startTime DESC") fun reservations(): Flow<List<Reservation>>
+            @Query("SELECT * FROM reservations") suspend fun allReservations(): List<Reservation>
+            @Insert suspend fun insertReservation(r: Reservation): Long
+            @Delete suspend fun deleteReservation(r: Reservation)
+
+            @Query("SELECT * FROM discounts ORDER BY id DESC") fun discounts(): Flow<List<Discount>>
+            @Insert suspend fun insertDiscount(d: Discount): Long
+            @Update suspend fun updateDiscount(d: Discount)
+            @Delete suspend fun deleteDiscount(d: Discount)
+
+            @Query("SELECT SUM(gameCost) FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to") suspend fun gameSalesBetween(from: Long, to: Long): Long?
+            @Query("SELECT COUNT(*) FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to") suspend fun sessionCountBetween(from: Long, to: Long): Int
+            @Query("SELECT SUM(totalDurationMinutes) FROM sessions WHERE isPaid = 1 AND endTime BETWEEN :from AND :to") suspend fun minutesBetween(from: Long, to: Long): Long?
+            @Query("""SELECT deviceName AS name, COUNT(*) AS c, SUM(gameCost) AS s FROM sessions
+                WHERE isPaid = 1 AND endTime BETWEEN :from AND :to
+                GROUP BY deviceName ORDER BY c DESC LIMIT 10""")
+            suspend fun topDevices(from: Long, to: Long): List<NameCount>
+            @Query("""SELECT productName AS name, SUM(quantity) AS c, SUM(quantity * unitPrice) AS s
+                FROM buffet_order_items WHERE orderId IN
+                (SELECT id FROM buffet_orders WHERE timestamp BETWEEN :from AND :to)
+                GROUP BY productName ORDER BY c DESC LIMIT 10""")
+            suspend fun topProducts(from: Long, to: Long): List<NameCount>
+
+            @Query("SELECT * FROM settings WHERE `key` = :k") suspend fun getSetting(k: String): SettingEntry?
+            @Query("SELECT * FROM settings") fun settingsFlow(): Flow<List<SettingEntry>>
+            @Query("SELECT * FROM settings") suspend fun allSettings(): List<SettingEntry>
+            @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSetting(s: SettingEntry)
+
+            @Query("DELETE FROM devices") suspend fun clearDevices()
+            @Query("DELETE FROM services") suspend fun clearServices()
+            @Query("DELETE FROM sessions") suspend fun clearSessions()
+            @Query("DELETE FROM session_service_logs") suspend fun clearLogs()
+            @Query("DELETE FROM products") suspend fun clearProducts()
+            @Query("DELETE FROM buffet_orders") suspend fun clearOrders()
+            @Query("DELETE FROM buffet_order_items") suspend fun clearOrderItems()
+            @Query("DELETE FROM customers") suspend fun clearCustomers()
+            @Query("DELETE FROM reservations") suspend fun clearReservations()
+            @Query("DELETE FROM discounts") suspend fun clearDiscounts()
+            @Query("DELETE FROM settings") suspend fun clearSettings()
+          }
+          KTEOF
+
+          cat > app/src/main/java/com/cj/gamenet/data/AppDatabase.kt << 'KTEOF'
+          package com.cj.gamenet.data
+
+          import android.content.Context
+          import androidx.room.Database
+          import androidx.room.Room
+          import androidx.room.RoomDatabase
+
+          @Database(
+            entities = [Device::class, Service::class, Session::class, SessionServiceLog::class,
+              Product::class, BuffetOrder::class, BuffetOrderItem::class, Customer::class,
+              Reservation::class, Discount::class, SettingEntry::class],
+            version = 1, exportSchema = false
+          )
+          abstract class AppDatabase : RoomDatabase() {
+            abstract fun dao(): GameDao
+            companion object {
+              fun build(ctx: Context): AppDatabase =
+                Room.databaseBuilder(ctx, AppDatabase::class.java, "gamenet_cj.db")
+                  .fallbackToDestructiveMigration().build()
+            }
+          }
+          KTEOF
